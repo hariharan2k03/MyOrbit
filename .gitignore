@@ -16,3 +16,7 @@ expo-env.d.ts
 build-device/
 build/
 .claude/settings.local.json
+node_modules.nosync/
+ios.nosync/
+build-device.nosync/
+node_modules

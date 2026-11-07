@@ -1,25 +1,72 @@
 {
   "expo": {
-    "name": "DayPilot",
-    "slug": "DayPilot",
+    "name": "MyOrbit",
+    "slug": "daypilot",
+    "scheme": "daypilot",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
+    "platforms": [
+      "ios"
+    ],
     "ios": {
-      "supportsTablet": true
-    },
-    "android": {
-      "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+      "supportsTablet": false,
+      "bundleIdentifier": "com.daypilot.personal",
+      "deploymentTarget": "17.0",
+      "infoPlist": {
+        "NSFaceIDUsageDescription": "MyOrbit uses Face ID to unlock your data when App Lock is on.",
+        "NSSupportsLiveActivities": true,
+        "ITSAppUsesNonExemptEncryption": false
       },
-      "predictiveBackGestureEnabled": false
+      "appleTeamId": "UXQ2VPYB93"
     },
-    "web": {
-      "favicon": "./assets/favicon.png"
+    "plugins": [
+      "expo-router",
+      "expo-sqlite",
+      "expo-secure-store",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "MyOrbit uses Face ID to unlock your data when App Lock is on."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "enableRemoteNotifications": false
+        }
+      ],
+      "@react-native-community/datetimepicker",
+      "expo-font",
+      [
+        "expo-widgets",
+        {
+          "widgets": [
+            {
+              "name": "DayPilotToday",
+              "displayName": "MyOrbit Today",
+              "description": "Next activity, today\u2019s schedule, tasks and habits.",
+              "ios": {
+                "supportedFamilies": [
+                  "systemSmall",
+                  "systemMedium",
+                  "systemLarge",
+                  "accessoryCircular",
+                  "accessoryRectangular",
+                  "accessoryInline"
+                ],
+                "initialLayout": "src/widgets/TodayWidget.tsx"
+              }
+            }
+          ]
+        }
+      ],
+      "expo-sharing",
+      "./plugins/withAppIntents.js"
+    ],
+    "experiments": {
+      "typedRoutes": true
     }
   }
 }

@@ -1,0 +1,9 @@
+{
+  "name": "myorbit-ai",
+  "version": "1.0.0",
+  "description": "On-device Apple Foundation Models bridge for MyOrbit",
+  "license": "UNLICENSED",
+  "author": "MyOrbit",
+  "homepage": "https://example.invalid/myorbit",
+  "private": true
+}

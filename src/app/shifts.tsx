@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { worked } from '@/features/work/clock';
 import { View } from 'react-native';
 import { router } from 'expo-router';
 import { Card, Divider, EmptyState, Fab, IconButton, ListRow, QueryView, Row, Screen, Text } from '@/components/ui';
@@ -36,7 +37,20 @@ export default function ShiftsScreen() {
               shifts.map((s, i) => {
                 const phase = shiftPhase(s, now);
                 const status =
-                  s.status === 'cancelled' ? 'Cancelled' : s.status === 'completed' ? 'Completed' : phase === 'in_progress' ? 'In progress' : phase === 'finished' ? 'Finished' : 'Upcoming';
+                  s.status === 'cancelled'
+                    ? 'Cancelled'
+                    : s.clockOutAt !== null
+                      ? 'Clocked out'
+                      : s.clockInAt !== null
+                        ? 'Clocked in'
+                        : s.status === 'completed'
+                          ? 'Completed'
+                          : phase === 'in_progress'
+                            ? 'In progress'
+                            : phase === 'finished'
+                              ? 'Finished'
+                              : 'Upcoming';
+                const changed = s.changedAt !== null && s.status !== 'cancelled' ? ' · Changed' : '';
                 return (
                   <View key={s.id}>
                     {i > 0 ? <Divider /> : null}
@@ -44,8 +58,8 @@ export default function ShiftsScreen() {
                       icon="briefcase.fill"
                       iconColor={s.status === 'cancelled' ? colors.textTertiary : s.workplaceColor}
                       title={`${formatDateKey(s.shiftDate, { weekday: true })} · ${s.workplaceName}`}
-                      subtitle={`${formatTimeRange(s.startAt, s.endAt)} · ${status}`}
-                      value={s.status === 'cancelled' ? undefined : formatCents(shiftPay(s, s.rates).grossCents)}
+                      subtitle={`${formatTimeRange(s.startAt, s.endAt)} · ${status}${changed}`}
+                      value={s.status === 'cancelled' ? undefined : formatCents(shiftPay(worked(s), s.rates).grossCents)}
                       strike={s.status === 'cancelled'}
                       onPress={() => openShiftActions(db, s, () => notifyDataChanged('work'))}
                     />

@@ -16,6 +16,8 @@ export function AppLockGate({ children }: { children: ReactNode }) {
   // Turning App Lock off in Settings unlocks immediately.
   const locked = settings.appLockEnabled && lockedState;
   const [message, setMessage] = useState<string | null>(null);
+  // Hides content in the app switcher and while MyOrbit is in the background.
+  const [covered, setCovered] = useState(false);
   const backgroundedAt = useRef<number | null>(null);
   // Auto-prompt once each time the lock screen appears (not on every re-render).
   const prompted = useRef(false);
@@ -37,6 +39,7 @@ export function AppLockGate({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!settings.appLockEnabled) return;
     const sub = AppState.addEventListener('change', (state) => {
+      setCovered(state !== 'active');
       if (state === 'background') backgroundedAt.current = Date.now();
       if (state === 'active' && backgroundedAt.current !== null) {
         if (Date.now() - backgroundedAt.current >= settings.autoLockSeconds * 1000) {
@@ -49,7 +52,19 @@ export function AppLockGate({ children }: { children: ReactNode }) {
     return () => sub.remove();
   }, [settings.appLockEnabled, settings.autoLockSeconds]);
 
-  if (!locked) return <>{children}</>;
+  if (!locked) {
+    return (
+      <>
+        {children}
+        {covered && settings.appLockEnabled ? (
+          <View style={[StyleSheet.absoluteFill, styles.lock, { backgroundColor: colors.background }]} accessibilityElementsHidden>
+            <Icon name="lock.fill" color={colors.accent} size={40} />
+            <Text variant="title">MyOrbit</Text>
+          </View>
+        ) : null}
+      </>
+    );
+  }
   return (
     <View
       style={[styles.lock, { backgroundColor: colors.background }]}

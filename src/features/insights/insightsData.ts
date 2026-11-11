@@ -1,4 +1,5 @@
 import { listStudySessions } from '@/database/repositories/study';
+import { worked } from '@/features/work/clock';
 import { listHabitsWithStats } from '@/database/repositories/tasks';
 import { listShiftsInRange } from '@/database/repositories/work';
 import type { SqlDb } from '@/database/types';
@@ -59,7 +60,7 @@ export async function loadInsights(db: SqlDb, now = Date.now()): Promise<Insight
 
   return {
     week,
-    workMinutes: shifts.filter((s) => s.status !== 'cancelled').reduce((m, s) => m + paidMinutesOf(s), 0),
+    workMinutes: shifts.filter((s) => s.status !== 'cancelled').reduce((m, s) => m + paidMinutesOf(worked(s)), 0),
     studyMinutes: sessions.filter((s) => s.endedAt !== null).reduce((m, s) => m + Math.round((s.endedAt! - s.startedAt) / 60_000), 0),
     tasksDone,
     tasksDoneLastWeek,

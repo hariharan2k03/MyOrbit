@@ -1,8 +1,8 @@
 node_modules/
 .expo/
 dist/
-ios/
-android/
+/ios/
+/android/
 *.log
 .env*
 graphify-out/
@@ -20,3 +20,5 @@ node_modules.nosync/
 ios.nosync/
 build-device.nosync/
 node_modules
+/ios
+build-sim.nosync/

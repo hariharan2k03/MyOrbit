@@ -7,7 +7,8 @@ import { syncStaleFeeds } from '@/database/repositories/calendarFeeds';
 import { AppLockGate } from '@/services/AppLock';
 import { AppProvider, onDataChanged, useApp, useAppBootstrap, useFallbackColors } from '@/services/AppContext';
 import { syncTimerActivity } from '@/services/liveActivitySync';
-import { syncReminders, useReminderTaps } from '@/services/reminderSync';
+import { syncReminders, useReminderTaps, type ReminderAction } from '@/services/reminderSync';
+import { clockInNow, clockOutNow } from '@/services/shiftClock';
 import { refreshWidgets } from '@/services/widgetSync';
 import { takeQueuedActions } from '@/services/intentQueue';
 import { applyIntentActions } from '@/features/intents/intentActions';
@@ -111,7 +112,28 @@ function ThemedStack() {
       if (timer) clearTimeout(timer);
     };
   }, [db, settings]);
-  useReminderTaps(useCallback((url: string) => void Linking.openURL(url), []));
+  // Tapping a reminder opens its screen; its Clock In / Clock Out button clocks you in or out.
+  const clockIn = settings.clockInEarlyMinutes;
+  const clockOut = settings.clockOutEarlyMinutes;
+  useReminderTaps(
+    useCallback(
+      (a: ReminderAction) => {
+        if (a.kind === 'open') return void Linking.openURL(a.url);
+        void (async () => {
+          const rules = { clockInEarlyMinutes: clockIn, clockOutEarlyMinutes: clockOut };
+          try {
+            if (a.kind === 'clock-in') await clockInNow(db, a.shiftId, rules);
+            else await clockOutNow(db, a.shiftId, rules);
+            notifyDataChanged('all');
+          } catch (e) {
+            Alert.alert(a.kind === 'clock-in' ? 'Couldn’t clock in' : 'Couldn’t clock out', e instanceof Error ? e.message : String(e));
+          }
+          void Linking.openURL('daypilot://work');
+        })();
+      },
+      [db, clockIn, clockOut, notifyDataChanged],
+    ),
+  );
 
   // Timer sessions drive the Lock Screen / Dynamic Island Live Activity. Re-checked on
   // foreground too, so a timer that finished while MyOrbit was closed is dismissed.
@@ -176,6 +198,9 @@ function ThemedStack() {
         <Stack.Screen name="calendar" options={{ title: 'Calendar' }} />
         <Stack.Screen name="insights" options={{ title: 'Insights' }} />
         <Stack.Screen name="shifts" options={{ title: 'My Shifts' }} />
+        <Stack.Screen name="roster-import" options={{ ...modal, title: 'Upload Roster' }} />
+        <Stack.Screen name="work-records" options={{ title: 'Work Records' }} />
+        <Stack.Screen name="work-settings" options={{ title: 'Clock & Roster' }} />
         <Stack.Screen name="calendar-feeds" options={{ title: 'Subscribed Calendars' }} />
         <Stack.Screen name="reminders" options={{ title: 'Reminders' }} />
         <Stack.Screen name="backup" options={{ title: 'Backup & Restore' }} />

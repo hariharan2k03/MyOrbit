@@ -9,6 +9,25 @@ Notifications.setNotificationHandler({
   handleNotification: async () => ({ shouldShowBanner: true, shouldShowList: true, shouldPlaySound: true, shouldSetBadge: false }),
 });
 
+/** Notification buttons. iOS asks for Face ID / passcode before running them on a locked phone. */
+export const CLOCK_IN_ACTION = 'clock-in';
+export const CLOCK_OUT_ACTION = 'clock-out';
+let categoriesReady: Promise<unknown> | null = null;
+function ensureCategories(): Promise<unknown> {
+  categoriesReady ??= Promise.all([
+    Notifications.setNotificationCategoryAsync('clock-in', [
+      { identifier: CLOCK_IN_ACTION, buttonTitle: 'Clock In', options: { opensAppToForeground: true, isAuthenticationRequired: true } },
+    ]),
+    Notifications.setNotificationCategoryAsync('clock-out', [
+      { identifier: CLOCK_OUT_ACTION, buttonTitle: 'Clock Out', options: { opensAppToForeground: true, isAuthenticationRequired: true } },
+    ]),
+  ]).catch((e: unknown) => {
+    categoriesReady = null;
+    console.warn('Notification buttons unavailable', e);
+  });
+  return categoriesReady;
+}
+
 export async function hasNotificationPermission(): Promise<boolean> {
   const p = await Notifications.getPermissionsAsync();
   return p.granted;
@@ -36,11 +55,18 @@ export function syncReminders(db: SqlDb, settings: AppSettings): Promise<void> {
 async function doSync(db: SqlDb, settings: AppSettings): Promise<void> {
   const allowed = settings.notificationsEnabled && (await hasNotificationPermission());
   const plan = allowed ? await planReminders(db, settings) : [];
+  if (allowed) await ensureCategories();
   await Notifications.cancelAllScheduledNotificationsAsync();
   const scheduled: { r: (typeof plan)[number]; id: string }[] = [];
   for (const r of plan) {
     const id = await Notifications.scheduleNotificationAsync({
-      content: { title: r.title, body: r.body, data: { url: r.url }, sound: 'default' },
+      content: {
+        title: r.title,
+        body: r.body,
+        data: { url: r.url, ...r.data },
+        sound: 'default',
+        ...(r.categoryId ? { categoryIdentifier: r.categoryId } : null),
+      },
       trigger: r.daily
         ? { type: Notifications.SchedulableTriggerInputTypes.DAILY, hour: r.daily.hour, minute: r.daily.minute }
         : { type: Notifications.SchedulableTriggerInputTypes.DATE, date: new Date(r.fireAt) },
@@ -59,19 +85,34 @@ async function doSync(db: SqlDb, settings: AppSettings): Promise<void> {
   });
 }
 
+/** Shows a notification straight away (e.g. "Roster updated"), if reminders are on and allowed. */
+export async function notifyNow(settings: AppSettings, title: string, body: string, url = 'daypilot://work'): Promise<void> {
+  if (!settings.notificationsEnabled || !(await hasNotificationPermission())) return;
+  await Notifications.scheduleNotificationAsync({ content: { title, body, data: { url }, sound: 'default' }, trigger: null });
+}
+
+export type ReminderAction = { kind: 'open'; url: string } | { kind: 'clock-in' | 'clock-out'; shiftId: number };
+
 /**
- * Opens the screen a tapped reminder points at — whether the tap launched the
- * app or arrived while it was running. Each response is handled once.
+ * Handles a tapped reminder or one of its buttons — whether the tap launched
+ * the app or arrived while it was running. Each response is handled once.
  */
-export function useReminderTaps(open: (url: string) => void): void {
+export function useReminderTaps(handle: (action: ReminderAction) => void): void {
   const response = Notifications.useLastNotificationResponse();
   const handled = useRef<string | null>(null);
   useEffect(() => {
-    if (!response || response.actionIdentifier !== Notifications.DEFAULT_ACTION_IDENTIFIER) return;
-    const key = `${response.notification.request.identifier}:${response.notification.date}`;
+    if (!response) return;
+    const key = `${response.notification.request.identifier}:${response.notification.date}:${response.actionIdentifier}`;
     if (handled.current === key) return;
     handled.current = key;
-    const url = response.notification.request.content.data?.url;
-    if (typeof url === 'string' && url.startsWith('daypilot://')) open(url);
-  }, [response, open]);
+    const data = response.notification.request.content.data ?? {};
+    const shiftId = typeof data.shiftId === 'number' ? data.shiftId : null;
+    if ((response.actionIdentifier === CLOCK_IN_ACTION || response.actionIdentifier === CLOCK_OUT_ACTION) && shiftId !== null) {
+      handle({ kind: response.actionIdentifier, shiftId });
+      return;
+    }
+    if (response.actionIdentifier !== Notifications.DEFAULT_ACTION_IDENTIFIER) return;
+    const url = data.url;
+    if (typeof url === 'string' && url.startsWith('daypilot://')) handle({ kind: 'open', url });
+  }, [response, handle]);
 }

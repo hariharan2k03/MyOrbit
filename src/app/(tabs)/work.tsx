@@ -1,15 +1,17 @@
 import { router, type Href } from 'expo-router';
+import { worked } from '@/features/work/clock';
 import { useState } from 'react';
 import { ActionSheetIOS, Alert, Pressable, StyleSheet, View } from 'react-native';
 import { Segmented } from '@/components/form';
 import { Card, Divider, EmptyState, Fab, GradientTile, Icon, IconButton, ListRow, ProgressBar, QueryView, Row, Screen, SectionHeader, Stat, Text } from '@/components/ui';
 import { listIncome } from '@/database/repositories/finance';
-import { listShiftsInRange, listUpcomingShifts, listWorkplaces, type Shift } from '@/database/repositories/work';
+import { ClockCard } from '@/components/ClockCard';
+import { getClockShift, listShiftsInRange, listWorkplaces, type Shift } from '@/database/repositories/work';
 import type { SqlDb } from '@/database/types';
 import { TAX_RESIDENCY_LABEL, TAX_YEAR_LABEL, takeHome, type TaxResidency } from '@/features/finance/auTax';
 import { PAY_KIND_LABEL, shiftPay, type PayKind } from '@/features/work/payRates';
 import { leadLabel } from '@/features/reminders/planReminders';
-import { paidMinutesOf, shiftPhase } from '@/features/work/shiftMath';
+import { paidMinutesOf } from '@/features/work/shiftMath';
 import { DEFAULT_SETTINGS } from '@/database/repositories/settings';
 import { useApp } from '@/services/AppContext';
 import { useQuery } from '@/services/useQuery';
@@ -25,28 +27,28 @@ async function loadWork(db: SqlDb, anchor: DateKey, payAnchor: DateKey) {
   const lastWeek = weekRange(addDays(anchor, -7));
   const month = monthRange(anchor);
   const fortnight = fortnightRange(anchor, payAnchor);
-  const [weekShifts, lastWeekShifts, monthShifts, fortnightShifts, workplaces, upcoming, monthIncome] = await Promise.all([
+  const [weekShifts, lastWeekShifts, monthShifts, fortnightShifts, workplaces, clockShift, monthIncome] = await Promise.all([
     listShiftsInRange(db, week),
     listShiftsInRange(db, lastWeek),
     listShiftsInRange(db, month),
     listShiftsInRange(db, fortnight),
     listWorkplaces(db),
-    listUpcomingShifts(db, now, 1),
+    getClockShift(db, now),
     listIncome(db, month),
   ]);
-  return { now, week, month, fortnight, weekShifts, lastWeekShifts, monthShifts, fortnightShifts, workplaces, next: upcoming[0] ?? null, monthIncome };
+  return { now, week, month, fortnight, weekShifts, lastWeekShifts, monthShifts, fortnightShifts, workplaces, clockShift, monthIncome };
 }
 
 const active = (shifts: Shift[]) => shifts.filter((s) => s.status !== 'cancelled');
-const paid = (shifts: Shift[]) => active(shifts).reduce((m, s) => m + paidMinutesOf(s), 0);
-const gross = (shifts: Shift[]) => active(shifts).reduce((c, s) => c + shiftPay(s, s.rates).grossCents, 0);
+const paid = (shifts: Shift[]) => active(shifts).reduce((m, s) => m + paidMinutesOf(worked(s)), 0);
+const gross = (shifts: Shift[]) => active(shifts).reduce((c, s) => c + shiftPay(worked(s), s.rates).grossCents, 0);
 const hoursLabel = (minutes: number) => `${Math.round((minutes / 60) * 10) / 10}h`;
 
 /** Gross split by pay type (ordinary, night, Saturday, Sunday) across shifts. */
 function grossByKind(shifts: Shift[]) {
   const totals = new Map<PayKind, { minutes: number; cents: number }>();
   for (const s of active(shifts)) {
-    for (const seg of shiftPay(s, s.rates).segments) {
+    for (const seg of shiftPay(worked(s), s.rates).segments) {
       const t = totals.get(seg.kind) ?? { minutes: 0, cents: 0 };
       t.minutes += seg.minutes;
       t.cents += seg.cents;
@@ -54,12 +56,6 @@ function grossByKind(shifts: Shift[]) {
     }
   }
   return [...totals.entries()].map(([kind, t]) => ({ kind, ...t }));
-}
-
-function relativeDay(date: DateKey, today: DateKey) {
-  if (date === today) return 'Today';
-  if (date === addDays(today, 1)) return 'Tomorrow';
-  return formatDateKey(date, { weekday: true });
 }
 
 export default function WorkScreen() {
@@ -188,8 +184,9 @@ export default function WorkScreen() {
 
           if (tab === 'schedule') {
             const menu: { icon: string; tone: TileTone; title: string; subtitle: string; onPress: () => void }[] = [
+              { icon: 'doc.text.viewfinder', tone: 'sky', title: 'Upload Roster', subtitle: 'Photo, screenshot or PDF — only your shifts', onPress: () => router.push('/roster-import' as Href) },
               { icon: 'calendar', tone: 'accent', title: 'My Shifts', subtitle: `${active(d.weekShifts).length} this week`, onPress: () => router.push('/shifts' as Href) },
-              { icon: 'clock.fill', tone: 'sky', title: 'Working Hours', subtitle: `${formatDuration(weekMin)} this week`, onPress: () => setTab('hours') },
+              { icon: 'list.clipboard.fill', tone: 'work', title: 'Work Records', subtitle: `${formatDuration(weekMin)} this week · clock in/out history`, onPress: () => router.push('/work-records' as Href) },
               { icon: 'banknote.fill', tone: 'money', title: 'Salary & Payslips', subtitle: `${formatCents(weekNet.netCents)} est. take-home`, onPress: () => setTab('salary') },
               { icon: 'building.2.fill', tone: 'work', title: 'Workplaces & Pay Rates', subtitle: `${d.workplaces.length} ${d.workplaces.length === 1 ? 'workplace' : 'workplaces'}`, onPress: () => router.push('/workplaces' as Href) },
               {
@@ -199,35 +196,17 @@ export default function WorkScreen() {
                 subtitle: settings.notificationsEnabled && settings.shiftReminderMinutes > 0 ? `${leadLabel(settings.shiftReminderMinutes)} before each shift` : 'Off',
                 onPress: () => router.push('/reminders' as Href),
               },
+              {
+                icon: 'gearshape.fill',
+                tone: 'accent',
+                title: 'Clock & Roster',
+                subtitle: `Clock in ${settings.clockInEarlyMinutes} min early · out ${settings.clockOutEarlyMinutes} min early${settings.appLockEnabled ? ' · Face ID on' : ''}`,
+                onPress: () => router.push('/work-settings' as Href),
+              },
             ];
             return (
               <>
-                {d.next ? (
-                  <Card onPress={() => router.push(`/shift/${d.next!.id}`)} accessibilityLabel="Next shift">
-                    <Row>
-                      <GradientTile icon="calendar" tone="accent" size={44} />
-                      <View style={{ flex: 1, gap: 2 }}>
-                        <Text variant="headline">Next Shift</Text>
-                        <Text variant="subhead" tone="secondary">
-                          {relativeDay(d.next.shiftDate, today)}, {formatTimeRange(d.next.startAt, d.next.endAt)}
-                        </Text>
-                        <Text variant="caption" tone="tertiary">
-                          {d.next.workplaceName} · {shiftPhase(d.next, d.now) === 'in_progress' ? 'In progress' : 'Upcoming'}
-                        </Text>
-                      </View>
-                      <Icon name="chevron.right" color={colors.textTertiary} size={12} />
-                    </Row>
-                  </Card>
-                ) : (
-                  <Card>
-                    <Row>
-                      <GradientTile icon="calendar" tone="accent" size={44} />
-                      <Text variant="subhead" tone="secondary" style={{ flex: 1 }}>
-                        No upcoming shifts. Tap + to add one.
-                      </Text>
-                    </Row>
-                  </Card>
-                )}
+                <ClockCard shift={d.clockShift} />
                 {thisWeekCard}
                 <Card style={{ paddingVertical: spacing.xs }}>
                   {menu.map((m, i) => (
@@ -267,7 +246,7 @@ export default function WorkScreen() {
                         iconColor={s.workplaceColor}
                         title={`${formatDateKey(s.shiftDate, { weekday: true })} · ${s.workplaceName}`}
                         subtitle={formatTimeRange(s.startAt, s.endAt)}
-                        value={formatDuration(paidMinutesOf(s))}
+                        value={formatDuration(paidMinutesOf(worked(s)))}
                         onPress={() => router.push(`/shift/${s.id}`)}
                       />
                     ))

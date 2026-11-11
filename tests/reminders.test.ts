@@ -10,7 +10,8 @@ import { createTestDb } from './helpers/testDb';
 
 // Sat 7 Nov 2026, 10:00 AM (tests run with TZ=Australia/Melbourne).
 const NOW = new Date(2026, 10, 7, 10, 0).getTime();
-const prefs = { ...DEFAULT_SETTINGS, notificationsEnabled: true };
+// Clock reminders have their own tests (clock.test.ts); these cover the others.
+const prefs = { ...DEFAULT_SETTINGS, notificationsEnabled: true, remindClock: false };
 
 async function withShift(start = '09:00', end = '17:00', date = '2026-11-10', reminderMinutes?: number | null) {
   const db = await createTestDb();

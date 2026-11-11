@@ -6,7 +6,8 @@
     "modules": [
       "MyOrbitAIModule",
       "MyOrbitCryptoModule",
-      "MyOrbitIntentsModule"
+      "MyOrbitIntentsModule",
+      "MyOrbitRosterModule"
     ]
   }
 }

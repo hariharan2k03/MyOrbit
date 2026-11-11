@@ -1,4 +1,5 @@
 import { expenseTotalsByCategory, totalExpenses, totalIncome } from '@/database/repositories/finance';
+import { worked } from '@/features/work/clock';
 import type { AppSettings } from '@/database/repositories/settings';
 import { listUpcomingAssessments } from '@/database/repositories/study';
 import { listTasks } from '@/database/repositories/tasks';
@@ -18,8 +19,8 @@ const DAY_END_MIN = 22 * 60;
 const MIN_FREE_MIN = 45;
 
 const active = (shifts: Shift[]) => shifts.filter((s) => s.status !== 'cancelled');
-const gross = (shifts: Shift[]) => active(shifts).reduce((c, s) => c + shiftPay(s, s.rates).grossCents, 0);
-const paid = (shifts: Shift[]) => active(shifts).reduce((m, s) => m + paidMinutesOf(s), 0);
+const gross = (shifts: Shift[]) => active(shifts).reduce((c, s) => c + shiftPay(worked(s), s.rates).grossCents, 0);
+const paid = (shifts: Shift[]) => active(shifts).reduce((m, s) => m + paidMinutesOf(worked(s)), 0);
 const day = (k: DateKey) => formatDateKey(k, { weekday: true });
 
 /**
@@ -82,7 +83,7 @@ export async function buildFacts(db: SqlDb, settings: Pick<AppSettings, 'taxResi
   lines.push(period(`This month (${monthLabel(today)})`, monthShifts, 12));
   lines.push(period(`Last month (${monthLabel(lastMonth.start)})`, lastMonthShifts, 12));
   const next = active(upcoming).filter((s) => s.endAt > now).slice(0, 5);
-  lines.push(next.length ? `- Upcoming shifts: ${next.map((s) => `${day(s.shiftDate)} ${formatTimeRange(s.startAt, s.endAt)} at ${s.workplaceName} (${formatCents(shiftPay(s, s.rates).grossCents)})`).join('; ')}.` : '- No shifts in the next two weeks.');
+  lines.push(next.length ? `- Upcoming shifts: ${next.map((s) => `${day(s.shiftDate)} ${formatTimeRange(s.startAt, s.endAt)} at ${s.workplaceName} (${formatCents(shiftPay(worked(s), s.rates).grossCents)})`).join('; ')}.` : '- No shifts in the next two weeks.');
 
   lines.push('', `MONEY (${monthLabel(today)})`);
   lines.push(`- Income recorded: ${formatCents(dash.monthIncomeCents)}. Spent: ${formatCents(dash.monthExpenseCents)}.`);

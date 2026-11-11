@@ -1,4 +1,5 @@
 import { TAX_RESIDENCY_LABEL, type TaxResidency } from '@/features/finance/auTax';
+import { CLOCK_IN_EARLY_OPTIONS, CLOCK_OUT_EARLY_OPTIONS } from '@/features/work/clock';
 import { isValidDateKey } from '@/utils/time';
 import type { SqlDb } from '../types';
 
@@ -31,6 +32,16 @@ export interface AppSettings {
   habitReminderTime: string;
   /** Any date in a week that starts a pay fortnight (for fortnightly pay totals). */
   payFortnightAnchor: string;
+  /** Your name as it's written on rosters, plus variants, comma-separated ("HARIHARAN, Hari"). */
+  rosterNames: string;
+  /** Clock In unlocks this many minutes before a shift starts. */
+  clockInEarlyMinutes: number;
+  /** Clock Out unlocks this many minutes before a shift ends. */
+  clockOutEarlyMinutes: number;
+  /** Notifications when Clock In / Clock Out unlock, and if you forget to clock out. */
+  remindClock: boolean;
+  /** Unpaid break added to shifts imported from a roster. */
+  rosterBreakMinutes: number;
 }
 
 export const SHIFT_REMINDER_OPTIONS = [0, 15, 30, 60, 120, 180] as const;
@@ -52,6 +63,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   remindHabits: false,
   habitReminderTime: '20:00',
   payFortnightAnchor: '2026-01-05',
+  rosterNames: '',
+  clockInEarlyMinutes: 10,
+  clockOutEarlyMinutes: 30,
+  remindClock: true,
+  rosterBreakMinutes: 0,
 };
 
 type Key = keyof AppSettings;
@@ -64,6 +80,10 @@ function isValid<K extends Key>(key: K, value: unknown): value is AppSettings[K]
   if (key === 'shiftReminderMinutes') return (SHIFT_REMINDER_OPTIONS as readonly unknown[]).includes(value);
   if (key === 'habitReminderTime') return typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
   if (key === 'payFortnightAnchor') return typeof value === 'string' && isValidDateKey(value);
+  if (key === 'clockInEarlyMinutes') return (CLOCK_IN_EARLY_OPTIONS as readonly unknown[]).includes(value);
+  if (key === 'clockOutEarlyMinutes') return (CLOCK_OUT_EARLY_OPTIONS as readonly unknown[]).includes(value);
+  if (key === 'rosterBreakMinutes') return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 120;
+  if (key === 'rosterNames') return typeof value === 'string' && value.length <= 200;
   if (key === 'weeklyHoursTarget') return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 80;
   return typeof value === typeof def;
 }
@@ -104,4 +124,12 @@ export function migrateCards(cards: string[]): string[] {
     if (known.has(id) && !out.includes(id)) out.push(id);
   }
   return out;
+}
+
+/** The roster names setting as a list ("HARIHARAN, Hari" → ["HARIHARAN", "Hari"]). */
+export function rosterNameList(setting: string): string[] {
+  return setting
+    .split(',')
+    .map((n) => n.trim())
+    .filter((n) => n.length >= 2);
 }

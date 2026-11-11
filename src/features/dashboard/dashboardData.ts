@@ -1,4 +1,5 @@
 import { getActiveActivitySession, type ActivitySession } from '@/database/repositories/activities';
+import { worked } from '@/features/work/clock';
 import { listBudgets, totalExpenses, totalIncome } from '@/database/repositories/finance';
 import { listStudySessions, listSubjects, listUpcomingAssessments, type Assessment } from '@/database/repositories/study';
 import { listHabitsWithStats, listTasks, type Task } from '@/database/repositories/tasks';
@@ -132,7 +133,7 @@ export async function loadDashboard(db: SqlDb, now = Date.now()): Promise<Dashbo
 
   const days = eachDay(week).map<DayProductivity>((date) => ({
     date,
-    workMinutes: activeShifts.filter((s) => s.shiftDate === date).reduce((m, s) => m + paidMinutesOf(s), 0),
+    workMinutes: activeShifts.filter((s) => s.shiftDate === date).reduce((m, s) => m + paidMinutesOf(worked(s)), 0),
     studyMinutes: sessions
       .filter((s) => s.sessionDate === date && s.endedAt !== null)
       .reduce((m, s) => m + Math.round((s.endedAt! - s.startedAt) / 60_000), 0),
@@ -148,7 +149,7 @@ export async function loadDashboard(db: SqlDb, now = Date.now()): Promise<Dashbo
     openTaskCount: openTasks.length,
     monthIncomeCents,
     monthExpenseCents,
-    weekEstimatedEarningsCents: activeShifts.reduce((c, s) => c + shiftPay(s, s.rates).grossCents, 0),
+    weekEstimatedEarningsCents: activeShifts.reduce((c, s) => c + shiftPay(worked(s), s.rates).grossCents, 0),
     budget: overall ? budgetStatus(overall.limitCents, budgetSpent) : null,
     studyWeekMinutes: days.reduce((m, d) => m + d.studyMinutes, 0),
     studyWeekGoalMinutes: subjects.reduce((m, s) => m + s.weeklyGoalMinutes, 0),

@@ -272,6 +272,19 @@ export const MIGRATIONS: Migration[] = [
       `CREATE INDEX idx_events_feed ON events(feed_id)`,
     ],
   },
+  {
+    version: 4,
+    description: 'Clock in/out on shifts; shifts imported from a roster and roster changes',
+    statements: [
+      `ALTER TABLE work_shifts ADD COLUMN clock_in_at INTEGER`,
+      `ALTER TABLE work_shifts ADD COLUMN clock_out_at INTEGER CHECK (clock_out_at IS NULL OR (clock_in_at IS NOT NULL AND clock_out_at > clock_in_at))`,
+      `ALTER TABLE work_shifts ADD COLUMN source TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('manual', 'roster'))`,
+      // The times before the latest roster change, shown as "was 12:00–4:00 PM".
+      `ALTER TABLE work_shifts ADD COLUMN previous_start_at INTEGER`,
+      `ALTER TABLE work_shifts ADD COLUMN previous_end_at INTEGER`,
+      `ALTER TABLE work_shifts ADD COLUMN changed_at INTEGER`,
+    ],
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;

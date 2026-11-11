@@ -23,6 +23,7 @@ export interface Workplace {
 }
 
 export type ShiftStatus = 'scheduled' | 'completed' | 'cancelled';
+export type ShiftSource = 'manual' | 'roster';
 
 export interface Shift {
   id: number;
@@ -39,6 +40,13 @@ export interface Shift {
   notes: string | null;
   /** The shift's base rate plus its workplace's penalty rates. */
   rates: PayRates;
+  clockInAt: number | null;
+  clockOutAt: number | null;
+  source: ShiftSource;
+  /** Times before the latest roster change, if a re-uploaded roster moved this shift. */
+  previousStartAt: number | null;
+  previousEndAt: number | null;
+  changedAt: number | null;
 }
 
 interface PenaltyRow {
@@ -72,6 +80,12 @@ interface ShiftRow extends PenaltyRow {
   status: ShiftStatus;
   reminder_minutes: number | null;
   notes: string | null;
+  clock_in_at: number | null;
+  clock_out_at: number | null;
+  source: ShiftSource;
+  previous_start_at: number | null;
+  previous_end_at: number | null;
+  changed_at: number | null;
 }
 
 const toWorkplace = (r: WorkplaceRow): Workplace => ({
@@ -110,6 +124,12 @@ const toShift = (r: ShiftRow): Shift => ({
     nightStartMin: r.night_start_min,
     nightEndMin: r.night_end_min,
   },
+  clockInAt: r.clock_in_at,
+  clockOutAt: r.clock_out_at,
+  source: r.source,
+  previousStartAt: r.previous_start_at,
+  previousEndAt: r.previous_end_at,
+  changedAt: r.changed_at,
 });
 
 export interface WorkplaceInput {
@@ -206,6 +226,7 @@ export interface ShiftSaveInput extends ShiftInput {
   workplaceId: number;
   reminderMinutes?: number | null;
   notes?: string | null;
+  source?: ShiftSource;
 }
 
 /**
@@ -235,9 +256,9 @@ export async function createShift(db: SqlDb, input: ShiftSaveInput): Promise<num
   const now = Date.now();
   const r = await db.runAsync(
     `INSERT INTO work_shifts (workplace_id, shift_date, start_at, end_at, unpaid_break_minutes, hourly_rate_cents,
-       reminder_minutes, notes, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [input.workplaceId, input.date, times.startAt, times.endAt, input.unpaidBreakMinutes, input.hourlyRateCents, reminder, notes, now, now],
+       reminder_minutes, notes, source, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [input.workplaceId, input.date, times.startAt, times.endAt, input.unpaidBreakMinutes, input.hourlyRateCents, reminder, notes, input.source ?? 'manual', now, now],
   );
   return r.lastInsertRowId;
 }
@@ -281,4 +302,72 @@ export async function listUpcomingShifts(db: SqlDb, now: number, limit = 5): Pro
     [now, limit],
   );
   return rows.map(toShift);
+}
+
+// ─── Clock in / clock out ────────────────────────────────────────────────────
+
+/** The shift the clock card is about: one you're clocked into, else the next one. */
+export async function getClockShift(db: SqlDb, now: number): Promise<Shift | null> {
+  const working = await db.getFirstAsync<ShiftRow>(
+    `${SHIFT_SELECT} WHERE s.status = 'scheduled' AND s.clock_in_at IS NOT NULL AND s.clock_out_at IS NULL ORDER BY s.clock_in_at DESC LIMIT 1`,
+  );
+  if (working) return toShift(working);
+  return (await listUpcomingShifts(db, now, 1))[0] ?? null;
+}
+
+export async function clockInShift(db: SqlDb, id: number, at: number): Promise<void> {
+  const r = await db.runAsync(
+    `UPDATE work_shifts SET clock_in_at = ?, updated_at = ? WHERE id = ? AND status = 'scheduled' AND clock_in_at IS NULL`,
+    [at, Date.now(), id],
+  );
+  if (r.changes === 0) throw new ValidationError('This shift is already clocked in or no longer scheduled.');
+}
+
+/** Clocking out records the finish time and marks the shift completed. */
+export async function clockOutShift(db: SqlDb, id: number, at: number): Promise<void> {
+  const row = await db.getFirstAsync<{ clock_in_at: number | null }>('SELECT clock_in_at FROM work_shifts WHERE id = ?', [id]);
+  if (!row?.clock_in_at) throw new ValidationError('Clock in before clocking out.');
+  if (at <= row.clock_in_at) throw new ValidationError('Clock-out must be after clock-in.');
+  await db.runAsync(`UPDATE work_shifts SET clock_out_at = ?, status = 'completed', updated_at = ? WHERE id = ?`, [at, Date.now(), id]);
+}
+
+/**
+ * Sets or clears the worked (clocked) times from the shift editor. Both set
+ * means the shift is completed; clearing them puts it back to scheduled.
+ */
+export async function setWorkedTimes(db: SqlDb, id: number, clockInAt: number | null, clockOutAt: number | null): Promise<void> {
+  if (clockOutAt !== null && clockInAt === null) throw new ValidationError('Add a clock-in time before the clock-out time.');
+  if (clockInAt !== null && clockOutAt !== null) {
+    if (clockOutAt <= clockInAt) throw new ValidationError('Clock-out must be after clock-in.');
+    if (clockOutAt - clockInAt > 16 * 3_600_000) throw new ValidationError('Worked time can be at most 16 hours.');
+  }
+  const status = clockInAt !== null && clockOutAt !== null ? 'completed' : 'scheduled';
+  await db.runAsync(
+    `UPDATE work_shifts SET clock_in_at = ?, clock_out_at = ?,
+       status = CASE WHEN status = 'cancelled' THEN status ELSE ? END, updated_at = ? WHERE id = ?`,
+    [clockInAt, clockOutAt, status, Date.now(), id],
+  );
+}
+
+/**
+ * Moves a shift to new times because the roster changed, remembering the old
+ * times so the app can show what changed. Break, rate and notes are kept.
+ */
+export async function rescheduleShift(db: SqlDb, id: number, date: DateKey, startTime: string, endTime: string, now = Date.now()): Promise<void> {
+  const s = await getShift(db, id);
+  if (!s) throw new ValidationError('That shift no longer exists.');
+  const { times } = await prepareShift(
+    db,
+    { workplaceId: s.workplaceId, date, startTime, endTime, unpaidBreakMinutes: s.unpaidBreakMinutes, hourlyRateCents: s.hourlyRateCents, reminderMinutes: s.reminderMinutes, notes: s.notes },
+    id,
+  );
+  await db.runAsync(
+    `UPDATE work_shifts SET shift_date = ?, start_at = ?, end_at = ?, previous_start_at = ?, previous_end_at = ?, changed_at = ?, updated_at = ? WHERE id = ?`,
+    [date, times.startAt, times.endAt, s.startAt, s.endAt, now, now, id],
+  );
+}
+
+/** A roster dropped this shift: cancel it, noting when. */
+export async function cancelShiftFromRoster(db: SqlDb, id: number, now = Date.now()): Promise<void> {
+  await db.runAsync(`UPDATE work_shifts SET status = 'cancelled', changed_at = ?, updated_at = ? WHERE id = ? AND clock_in_at IS NULL`, [now, now, id]);
 }

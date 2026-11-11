@@ -46,7 +46,7 @@
             {
               "name": "DayPilotToday",
               "displayName": "MyOrbit Today",
-              "description": "Next activity, today\u2019s schedule, tasks and habits.",
+              "description": "Next activity, today’s schedule, tasks and habits.",
               "ios": {
                 "supportedFamilies": [
                   "systemSmall",
@@ -63,7 +63,15 @@
         }
       ],
       "expo-sharing",
-      "./plugins/withAppIntents.js"
+      "./plugins/withAppIntents.js",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "MyOrbit opens the roster photo you choose and reads it on your iPhone to add your shifts.",
+          "cameraPermission": "MyOrbit uses the camera to photograph your roster and read your shifts on your iPhone.",
+          "microphonePermission": false
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

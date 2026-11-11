@@ -4,6 +4,16 @@
 
 MyOrbit runs entirely on your iPhone. There's no account, no cloud requirement, no ads, no tracking and no subscription.
 
+## Work: roster upload and clock in/out
+
+- **Upload Roster** (Work → Upload Roster): take a photo, choose a screenshot or open a PDF. The text is read on the iPhone with Apple Vision (nothing is uploaded), and only the shifts next to your name (Work → Clock & Roster → Name on roster) are kept. Team grids (people × days), transposed grids, lists and personal rosters are supported, including photos taken at an angle and weekday-only rosters (you pick the week).
+- **Review before saving**: every shift can be ticked, edited or removed, and you can add one by hand.
+- **Roster changes**: uploading a new roster for the same week marks shifts as New, Changed (showing the old time), No change or Not on roster. Saving moves or cancels them and sends a "Roster updated" notification.
+- **Clock In / Clock Out** on the Work tab: Clock In unlocks 10 minutes before a shift and Clock Out 30 minutes before it ends (both adjustable). A live timer runs while you work, with the countdown in the Dynamic Island. If you clock out late, you can record the rostered finish instead.
+- **Work Records**: clocked times per shift compared with the roster, with hours and estimated earnings by week or month. Once a shift is clocked out, hours and pay use the clocked times. Times can be corrected in the shift editor.
+- **Notifications**: when Clock In opens, when Clock Out opens, and if you're still clocked in 15 minutes after a shift. Clock In / Clock Out buttons sit right on the notification and need your iPhone unlocked.
+- **Face ID lock**: Work → Clock & Roster → Face ID lock (also in More). Content is hidden in the app switcher while it's on.
+
 ## Status
 
 Built and checked in the iOS Simulator: the core modules, widgets, the timer Live Activity and Dynamic Island, local reminders, Siri/Shortcuts actions, widget tick-off buttons, encrypted backup and restore, and on-device Personal AI. It hasn't been tested on a physical iPhone yet. See [DEVELOPMENT_STATUS.md](DEVELOPMENT_STATUS.md) and, to install it on your phone, [NATIVE_IOS_SETUP.md](NATIVE_IOS_SETUP.md).
@@ -55,6 +65,8 @@ npx expo run:ios --device
 | `npm run lint` | ESLint (`eslint-config-expo`, React Compiler rules) |
 | `npm test` | Jest (runs with `TZ=Australia/Melbourne` so DST tests are deterministic) |
 | `npm run check` | Typecheck + lint + tests |
+| `npm run phone` | Build a Release copy and install it on the connected iPhone (renews the 7-day free signature) |
+| `npm run icloud` | Keep `node_modules` and `ios` in `*.nosync` folders so iCloud Drive doesn't sync them (runs after every `npm install`) |
 
 ## Project layout
 

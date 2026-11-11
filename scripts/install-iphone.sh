@@ -15,14 +15,16 @@ if [ -z "$DEVICE" ]; then
   exit 1
 fi
 
-# ios/ is generated (not in git); create it on first run.
+# ios/ is generated (not in git); create it on first run, outside iCloud sync.
+bash scripts/keep-out-of-icloud.sh
 if [ ! -d ios/MyOrbit.xcworkspace ]; then
   echo "Generating the iOS project…"
   npx expo prebuild --platform ios
 fi
 
-# Build output is several GB; the .nosync suffix keeps it out of iCloud Drive.
-OUT="build-device.nosync"
+# Build output goes outside iCloud Drive: iCloud tags files with Finder data
+# that code signing rejects ("resource fork ... not allowed"), and it's several GB.
+OUT="$HOME/Library/Developer/MyOrbit/build-device"
 
 echo "Building MyOrbit for iPhone $DEVICE (team $TEAM_ID)…"
 xcodebuild -workspace ios/MyOrbit.xcworkspace -scheme MyOrbit -configuration Release \

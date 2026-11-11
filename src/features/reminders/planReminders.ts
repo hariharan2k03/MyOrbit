@@ -17,6 +17,10 @@ export interface PlannedReminder {
   url: string;
   /** Repeats every day at this time instead of firing once. */
   daily?: { hour: number; minute: number };
+  /** iOS notification category, which adds buttons such as "Clock In". */
+  categoryId?: 'clock-in' | 'clock-out';
+  /** Extra data for those buttons. */
+  data?: { shiftId: number };
 }
 
 /** How far ahead one-off reminders are scheduled; the app re-plans on every launch and data change. */
@@ -32,7 +36,11 @@ export function leadLabel(minutes: number): string {
   return h === 1 ? '1 hour' : `${h} hours`;
 }
 
-type Prefs = Pick<AppSettings, 'notificationsEnabled' | 'shiftReminderMinutes' | 'remindAssessments' | 'remindTasks' | 'remindHabits' | 'habitReminderTime'>;
+type Prefs = Pick<AppSettings, 'notificationsEnabled' | 'shiftReminderMinutes' | 'remindAssessments' | 'remindTasks' | 'remindHabits' | 'habitReminderTime'> &
+  Partial<Pick<AppSettings, 'remindClock' | 'clockInEarlyMinutes' | 'clockOutEarlyMinutes'>>;
+
+/** If you're still clocked in this long after a shift's rostered finish, you get a nudge. */
+export const FORGOT_CLOCK_OUT_MINUTES = 15;
 
 /**
  * Works out every reminder that should be pending right now, from the data.
@@ -46,20 +54,28 @@ export async function planReminders(db: SqlDb, prefs: Prefs, now = Date.now()): 
 
   {
     for (const s of await listUpcomingShifts(db, now, MAX_REMINDERS)) {
+      if (s.startAt > until) continue;
+      const when = `${s.workplaceName} · ${formatTimeRange(s.startAt, s.endAt)}`;
+      const shift = { entityType: 'shift' as const, entityId: s.id, url: 'daypilot://work', data: { shiftId: s.id } };
       // A shift's own setting wins; null means "use the default", 0 means "no reminder".
       const minutes = s.reminderMinutes ?? prefs.shiftReminderMinutes;
-      if (minutes <= 0) continue;
-      const fireAt = s.startAt - minutes * 60_000;
-      if (fireAt <= now || s.startAt > until) continue;
-      out.push({
-        entityType: 'shift',
-        entityId: s.id,
-        kind: 'before',
-        fireAt,
-        title: `Shift in ${leadLabel(minutes)}`,
-        body: `${s.workplaceName} · ${formatTimeRange(s.startAt, s.endAt)}`,
-        url: 'daypilot://work',
-      });
+      const before = s.startAt - minutes * 60_000;
+      if (minutes > 0 && before > now && s.clockInAt === null) {
+        out.push({ ...shift, kind: 'before', fireAt: before, title: `Shift in ${leadLabel(minutes)}`, body: when });
+      }
+      if (!prefs.remindClock) continue;
+      const clockIn = s.startAt - (prefs.clockInEarlyMinutes ?? 0) * 60_000;
+      if (s.clockInAt === null && clockIn > now) {
+        out.push({ ...shift, kind: 'clock_in', fireAt: clockIn, title: 'Time to clock in', body: `${when}. Clock in is open now.`, categoryId: 'clock-in' });
+      }
+      const clockOut = s.endAt - (prefs.clockOutEarlyMinutes ?? 0) * 60_000;
+      if (s.clockOutAt === null && clockOut > now) {
+        out.push({ ...shift, kind: 'clock_out', fireAt: clockOut, title: 'You can clock out', body: `${when}. Clock out is open now.`, categoryId: 'clock-out' });
+      }
+      const forgot = s.endAt + FORGOT_CLOCK_OUT_MINUTES * 60_000;
+      if (s.clockInAt !== null && s.clockOutAt === null && forgot > now) {
+        out.push({ ...shift, kind: 'clock_out_late', fireAt: forgot, title: 'Still clocked in?', body: `Your ${s.workplaceName} shift finished at ${formatClock(s.endAt)}. Clock out so your hours are right.`, categoryId: 'clock-out' });
+      }
     }
   }
 

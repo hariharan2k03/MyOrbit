@@ -1,14 +1,15 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import { ChoiceField, DateField, FormScreen, FormSection, MoneyField, TextField, TimeField } from '@/components/form';
+import { ChoiceField, DateField, FormScreen, FormSection, MoneyField, SwitchField, TextField, TimeField } from '@/components/form';
 import { Button, Card, EmptyState, Loading, Row, Stat, Text } from '@/components/ui';
-import { createShift, deleteShift, getShift, listWorkplaces, updateShift, type Workplace } from '@/database/repositories/work';
+import { createShift, deleteShift, getShift, listWorkplaces, setWorkedTimes, updateShift, type Shift, type Workplace } from '@/database/repositories/work';
+import { nearestInstant } from '@/features/work/clock';
 import { baseOnly, PAY_KIND_LABEL, shiftPay, type PayRates } from '@/features/work/payRates';
 import { computeShift } from '@/features/work/shiftMath';
 import { useApp } from '@/services/AppContext';
 import { formatCents, centsToInput, parseMoneyToCents } from '@/utils/money';
 import { unwrap, ValidationError } from '@/utils/result';
-import { formatDuration, toTimeValue, todayKey } from '@/utils/time';
+import { addDays, dateFromKey, formatDuration, formatTimeRange, parseTime, toTimeValue, todayKey } from '@/utils/time';
 import { parseIntInput } from '@/utils/validation';
 
 export default function ShiftForm() {
@@ -23,6 +24,12 @@ export default function ShiftForm() {
   const [breakMins, setBreakMins] = useState('30');
   const [rate, setRate] = useState('');
   const [notes, setNotes] = useState('');
+  const [original, setOriginal] = useState<Shift | null>(null);
+  // Worked (clocked) times, editable so a forgotten or wrong clock-in can be fixed.
+  const [hasIn, setHasIn] = useState(false);
+  const [hasOut, setHasOut] = useState(false);
+  const [inTime, setInTime] = useState('09:00');
+  const [outTime, setOutTime] = useState('17:00');
 
   useEffect(() => {
     void (async () => {
@@ -38,6 +45,11 @@ export default function ShiftForm() {
         setBreakMins(String(s.unpaidBreakMinutes));
         setRate(centsToInput(s.hourlyRateCents));
         setNotes(s.notes ?? '');
+        setOriginal(s);
+        setHasIn(s.clockInAt !== null);
+        setHasOut(s.clockOutAt !== null);
+        setInTime(toTimeValue(s.clockInAt ?? s.startAt));
+        setOutTime(toTimeValue(s.clockOutAt ?? s.endAt));
       } else if (wps[0]) {
         setWorkplaceId(wps[0].id);
         setRate(centsToInput(wps[0].defaultRateCents));
@@ -89,8 +101,19 @@ export default function ShiftForm() {
       hourlyRateCents: unwrap(parseMoneyToCents(rate, { allowZero: true })),
       notes,
     };
-    if (isNew) await createShift(db, input);
-    else await updateShift(db, Number(id), input);
+    if (isNew) {
+      await createShift(db, input);
+      return;
+    }
+    const times = unwrap(computeShift(input));
+    const days: [Date, Date, Date] = [dateFromKey(addDays(day, -1)), dateFromKey(day), dateFromKey(addDays(day, 1))];
+    const at = (hhmm: string, near: number) => nearestInstant(days, unwrap(parseTime(hhmm)), near);
+    const clockIn = hasIn ? at(inTime, times.startAt) : null;
+    // A clock-out is placed after the clock-in, nearest the rostered finish (so 00:15 lands on the next day).
+    const clockOut = hasIn && hasOut ? at(outTime, Math.max(times.endAt, (clockIn ?? 0) + 60_000)) : null;
+    if (clockIn !== null && clockOut !== null && clockOut <= clockIn) throw new ValidationError('Clock-out must be after clock-in.');
+    await updateShift(db, Number(id), input);
+    if (clockIn !== original?.clockInAt || clockOut !== original?.clockOutAt) await setWorkedTimes(db, Number(id), clockIn, clockOut);
   };
 
   return (
@@ -119,6 +142,19 @@ export default function ShiftForm() {
         <TimeField label="Finish" value={end} onChange={setEnd} />
         <TextField label="Unpaid break" value={breakMins} onChangeText={setBreakMins} keyboardType="number-pad" placeholder="minutes" maxLength={3} last />
       </FormSection>
+      {!isNew && original?.changedAt && original.previousStartAt !== null && original.previousEndAt !== null ? (
+        <Text variant="footnote" tone="warning">
+          Changed by a roster upload · was {formatTimeRange(original.previousStartAt, original.previousEndAt)}
+        </Text>
+      ) : null}
+      {!isNew ? (
+        <FormSection title="Worked times" footer="Your clock-in and clock-out. Once both are set, hours and pay use them instead of the rostered times.">
+          <SwitchField label="Clocked in" value={hasIn} onChange={(v) => { setHasIn(v); if (!v) setHasOut(false); }} last={!hasIn} />
+          {hasIn ? <TimeField label="Clock in" value={inTime} onChange={setInTime} /> : null}
+          {hasIn ? <SwitchField label="Clocked out" value={hasOut} onChange={setHasOut} last={!hasOut} /> : null}
+          {hasIn && hasOut ? <TimeField label="Clock out" value={outTime} onChange={setOutTime} last /> : null}
+        </FormSection>
+      ) : null}
       <FormSection title="Pay">
         <MoneyField label="Base rate" value={rate} onChangeText={setRate} last />
       </FormSection>

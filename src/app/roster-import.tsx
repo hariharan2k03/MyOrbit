@@ -1,5 +1,5 @@
-import { router } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
+import { router, Stack, useFocusEffect } from 'expo-router';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Image, Pressable, StyleSheet, View } from 'react-native';
 import { ChoiceField, DateField, FormSection, SwitchField, TextField, TimeField } from '@/components/form';
 import { Button, Card, Divider, EmptyState, GradientTile, Icon, Loading, Row, Screen, Tag, Text } from '@/components/ui';
@@ -13,7 +13,7 @@ import { useHaptics } from '@/services/haptics';
 import { notifyNow } from '@/services/reminderSync';
 import { pickRoster, readRoster, type PickedRoster, type RosterSource } from '@/services/rosterOcr';
 import { radius, spacing } from '@/theme/tokens';
-import { addDays, formatDateKey, formatTimeRange, startOfWeek, todayKey } from '@/utils/time';
+import { addDays, dateFromKey, formatDateKey, formatTimeRange, startOfWeek, todayKey } from '@/utils/time';
 import { parseIntInput } from '@/utils/validation';
 
 type Phase = { kind: 'pick' } | { kind: 'reading'; file: PickedRoster } | { kind: 'review'; file: PickedRoster | null; lines: OcrLine[] };
@@ -44,12 +44,36 @@ export default function RosterImport() {
   const [showText, setShowText] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    void listWorkplaces(db).then((w) => {
-      setWorkplaces(w);
-      setWorkplaceId((id) => id ?? w[0]?.id ?? null);
-    });
-  }, [db]);
+  // Back: from the review, return to choosing a photo; otherwise close Upload Roster.
+  const inReview = phase.kind === 'review';
+  const header = (
+    <Stack.Screen
+      options={{
+        headerLeft: () => (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={inReview ? 'Back to choose a photo' : 'Close'}
+            hitSlop={10}
+            onPress={() => (inReview ? setPhase({ kind: 'pick' }) : router.back())}
+          >
+            <Text color={colors.text} style={{ paddingHorizontal: 4 }}>
+              {inReview ? 'Back' : 'Close'}
+            </Text>
+          </Pressable>
+        ),
+      }}
+    />
+  );
+
+  // Reloaded on focus, so closing times set from the warning card apply on return.
+  useFocusEffect(
+    useCallback(() => {
+      void listWorkplaces(db).then((w) => {
+        setWorkplaces(w);
+        setWorkplaceId((id) => id ?? w[0]?.id ?? null);
+      });
+    }, [db]),
+  );
 
   // Shifts already saved at this workplace, to spot changes.
   useEffect(() => {
@@ -61,13 +85,24 @@ export default function RosterImport() {
   const nameList = rosterNameList(names);
 
   const parse = (lines: OcrLine[], ws: string) => {
-    const r = parseRoster(lines, { names: nameList, today: todayKey(), weekStart: ws });
+    const w = workplaces?.find((x) => x.id === workplaceId);
+    // "5-Close" ends at this workplace's closing time for that weekday.
+    const closeMinutes = (date: string) => w?.closeByDay?.[dateFromKey(date).getDay()] ?? null;
+    const r = parseRoster(lines, { names: nameList, today: todayKey(), weekStart: ws, closeMinutes });
     setParsed(r);
     setDrafts(r.shifts.map((s) => ({ ...s, key: newKey() })));
     setPicked({});
     setEditing(null);
     return r;
   };
+
+  // If the workplace's closing times change (set from the warning card), read the roster again.
+  const closeKey = JSON.stringify(workplaces?.find((x) => x.id === workplaceId)?.closeByDay ?? null);
+  const [readWithClose, setReadWithClose] = useState(closeKey);
+  if (closeKey !== readWithClose) {
+    setReadWithClose(closeKey);
+    if (phase.kind === 'review') parse(phase.lines, weekStart);
+  }
 
   const start = async (source: RosterSource) => {
     if (nameList.length === 0) return Alert.alert('Add your name', 'Enter your name as it appears on the roster, so only your shifts are taken.');
@@ -127,14 +162,24 @@ export default function RosterImport() {
     }
   };
 
-  if (!workplaces) return <Loading />;
+  if (!workplaces) {
+    return (
+      <>
+        {header}
+        <Loading />
+      </>
+    );
+  }
   if (workplaces.length === 0) {
     return (
-      <Screen largeTitle={false}>
+      <>
+        {header}
+        <Screen largeTitle={false}>
         <Card>
           <EmptyState icon="building.2" title="Add your workplace first" message="Imported shifts use its pay rates." action="Add workplace" onAction={() => router.replace('/workplace/new')} />
         </Card>
-      </Screen>
+        </Screen>
+      </>
     );
   }
 
@@ -156,7 +201,9 @@ export default function RosterImport() {
       { source: 'files', icon: 'doc', label: 'Import from Files (image or PDF)' },
     ];
     return (
-      <Screen largeTitle={false}>
+      <>
+        {header}
+        <Screen largeTitle={false}>
         <View style={[styles.drop, { borderColor: colors.accent }]}>
           <GradientTile icon="doc.text.viewfinder" tone="sky" size={56} />
           <Text variant="headline">Upload Your Roster</Text>
@@ -182,13 +229,16 @@ export default function RosterImport() {
         <Text variant="footnote" tone="tertiary">
           Tip: photograph the roster flat and in good light, with the day headings and your row in the frame.
         </Text>
-      </Screen>
+        </Screen>
+      </>
     );
   }
 
   if (phase.kind === 'reading') {
     return (
-      <Screen largeTitle={false}>
+      <>
+        {header}
+        <Screen largeTitle={false}>
         <Card style={{ alignItems: 'center', gap: spacing.md }}>
           {phase.file.previewUri ? <Image source={{ uri: phase.file.previewUri }} style={styles.preview} resizeMode="contain" /> : <Icon name="doc.richtext" size={44} color={colors.accent} />}
           <ActivityIndicator color={colors.accent} />
@@ -196,7 +246,8 @@ export default function RosterImport() {
             Reading your roster on this iPhone…
           </Text>
         </Card>
-      </Screen>
+        </Screen>
+      </>
     );
   }
 
@@ -211,7 +262,9 @@ export default function RosterImport() {
   } as const;
 
   return (
-    <Screen largeTitle={false}>
+    <>
+      {header}
+      <Screen largeTitle={false}>
       {phase.file?.previewUri ? <Image source={{ uri: phase.file.previewUri }} style={styles.thumb} resizeMode="cover" accessibilityLabel="Roster image" /> : null}
 
       <Card>
@@ -233,6 +286,23 @@ export default function RosterImport() {
           </View>
         </Row>
       </Card>
+
+      {r.closeTimeMissing ? (
+        <Card onPress={() => workplaceId !== null && router.push(`/workplace/${workplaceId}`)} accessibilityLabel="Set closing times">
+          <Row>
+            <Icon name="clock.badge.exclamationmark" color={colors.warning} size={24} />
+            <View style={{ flex: 1 }}>
+              <Text variant="callout" style={{ fontWeight: '600' }}>
+                Set your closing times
+              </Text>
+              <Text variant="footnote" tone="secondary">
+                Some shifts end at “Close”, so 10:00 PM was used. Tap to set this workplace’s closing times, then read the roster again.
+              </Text>
+            </View>
+            <Icon name="chevron.right" color={colors.textTertiary} size={12} />
+          </Row>
+        </Card>
+      ) : null}
 
       {r.usedWeekStart ? (
         <FormSection title="Roster week" footer="This roster only shows weekdays, so pick the week it’s for.">
@@ -361,7 +431,8 @@ export default function RosterImport() {
         onPress={() => void save()}
       />
       <Button title="Use a different photo" kind="plain" icon="arrow.counterclockwise" onPress={() => setPhase({ kind: 'pick' })} />
-    </Screen>
+      </Screen>
+    </>
   );
 }
 

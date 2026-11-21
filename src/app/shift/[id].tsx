@@ -74,6 +74,7 @@ export default function ShiftForm() {
             nightCents: w.nightRateCents,
             nightStartMin: w.nightStartMin,
             nightEndMin: w.nightEndMin,
+            nightStartByDay: w.nightStartByDay,
           }
         : null),
     };

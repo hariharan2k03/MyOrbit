@@ -6,6 +6,7 @@ import {
   getClockShift,
   getShift,
   listShiftsInRange,
+  setShiftStatus,
   setWorkedTimes,
 } from '@/database/repositories/work';
 import { planReminders } from '@/features/reminders/planReminders';
@@ -105,6 +106,17 @@ describe('roster updates', () => {
     expect(added).toMatchObject({ source: 'roster', startAt: at(13, 18) });
   });
 
+  it('never changes a shift you have already worked', async () => {
+    const { db, add } = await setup();
+    const worked = await add('2026-11-10', '17:00', '22:45', 'manual');
+    await setShiftStatus(db, worked, 'completed');
+    const clocked = await add('2026-11-11', '17:00', '22:40', 'manual');
+    await clockInShift(db, clocked, at(11, 16, 59));
+    const existing = await listShiftsInRange(db, { start: '2026-11-01', end: '2026-12-01' });
+    const changes = diffRoster(existing, [draft('2026-11-10', '17:00', '22:30'), draft('2026-11-11', '17:00', '22:30')]);
+    expect(changes.map((c) => c.kind)).toEqual(['same', 'same']);
+  });
+
   it('rolls everything back if one change can’t be saved', async () => {
     const { db, wp, add } = await setup();
     await add('2026-11-09', '12:00', '16:00', 'manual');
@@ -140,7 +152,7 @@ describe('clock reminders', () => {
     await clockInShift(db, id, at(10, 17, 55));
     expect(await kinds(at(10, 18))).toEqual([
       ['clock_out', '21:30'],
-      ['clock_out_late', '22:15'],
+      ['clock_out_late', '22:00'],
     ]);
     const clockOut = (await planReminders(db, prefs, at(10, 18))).find((r) => r.kind === 'clock_out');
     expect(clockOut).toMatchObject({ categoryId: 'clock-out', data: { shiftId: id } });

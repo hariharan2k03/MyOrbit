@@ -285,6 +285,37 @@ export const MIGRATIONS: Migration[] = [
       `ALTER TABLE work_shifts ADD COLUMN changed_at INTEGER`,
     ],
   },
+  {
+    version: 5,
+    description: 'Eating Out category, for purchases logged from Apple Pay',
+    statements: [
+      // Skipped if you already made a category with that name.
+      `INSERT OR IGNORE INTO expense_categories (name, icon, color, is_system, sort_order)
+        VALUES ('Eating Out', 'fork.knife', '#FB923C', 1, 3)`,
+    ],
+  },
+  {
+    version: 6,
+    description: 'Apple Pay purchases that arrived without an amount',
+    statements: [
+      `CREATE TABLE pending_purchases (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        merchant TEXT NOT NULL,
+        card TEXT,
+        spent_date TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )`,
+    ],
+  },
+  {
+    version: 7,
+    description: 'Closing time and night-pay start per weekday on workplaces',
+    statements: [
+      // JSON arrays of 7 entries (Sunday first): minutes after midnight, or null.
+      `ALTER TABLE workplaces ADD COLUMN close_by_day TEXT`,
+      `ALTER TABLE workplaces ADD COLUMN night_start_by_day TEXT`,
+    ],
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;

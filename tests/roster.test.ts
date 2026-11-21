@@ -1,4 +1,5 @@
-import { defaultWeekStart, findName, parseRoster, resolveRange, type OcrLine } from '@/features/work/rosterParse';
+import { defaultWeekStart, findName, parseRoster, resolveCloseStart, resolveRange, type OcrLine } from '@/features/work/rosterParse';
+import { dateFromKey } from '@/utils/time';
 
 // Sunday 8 Nov 2026; Mon 9 Nov is the start of the next week.
 const today = '2026-11-08';
@@ -180,5 +181,63 @@ describe('lists', () => {
   it('dates "Mon 10" style headings to the nearest matching date', () => {
     const r = shifts([line('Tue 10', 0.05, 0.1), line('HARIHARAN 12-4', 0.3, 0.1, 0.3)]);
     expect(simple(r)).toEqual(['2026-11-10 12:00-16:00']);
+  });
+});
+
+describe('spreadsheet roster with Close and split shifts', () => {
+  // Modelled on a real store roster: dates (right-aligned) over weekday labels,
+  // names at the bottom of tall cells, "5-Close" shifts and a split shift.
+  const L = (text: string, x: number, yc: number, width = 0.07, height = 0.012): OcrLine => ({ text, x, y: yc - height / 2, width, height });
+  const left = [0.21, 0.32, 0.41, 0.52, 0.65, 0.75, 0.86];
+  const dates = ['16-Nov', '17-Nov', '18-Nov', '19-Nov', '20-Nov', '21-Nov', '22-Nov'];
+  const days = ['Mon (9.30 PM)', 'TUE (9.30 PM)', 'Wed (9.30 P.M)', 'Thu (10.00 P.M)', 'Fri (10.00 P.M)', 'Sat (10.00 PM)', 'Sun (9.30 PM)'];
+  const cell = (col: number) => left[col]! + 0.03;
+  const roster: OcrLine[] = [
+    L('Store Roster', 0.21, 0.01, 0.3),
+    L('DATE:', 0, 0.055),
+    ...dates.map((d, i) => L(d, (left[i + 1] ?? 1) - 0.045, 0.055, 0.04)),
+    L('FULL NAMES:', 0, 0.073, 0.09),
+    ...days.map((d, i) => L(d, left[i]!, 0.073, 0.09)),
+    // Row above: one line, close to ours.
+    L('Person A', 0, 0.678),
+    L('4-Close', cell(0), 0.677),
+    L('4-Close', cell(1), 0.677),
+    // Our row: name at the bottom; Tuesday is a split shift on two lines.
+    L('11-4.00/', cell(1), 0.693),
+    L('5-Close', cell(1), 0.709),
+    L('Hariharan (Tr)', 0, 0.71, 0.1),
+    L('5-Close', cell(2), 0.709),
+    L('4-Close', cell(3), 0.709),
+    L('4-Close (cook)', cell(4), 0.709, 0.09),
+    // Row below starts right under ours.
+    L('9.30-3.00/', cell(2), 0.726),
+    L('4-9.00', cell(2), 0.742),
+    L('11-3.00/', cell(6), 0.726),
+    L('Person B', 0, 0.743),
+  ];
+  const close = (d: string) => ([1, 2, 3].includes(dateFromKey(d).getDay()) ? 22 * 60 + 30 : 23 * 60);
+
+  it('takes only my row, both halves of a split shift, and Close from the closing time', () => {
+    const r = parseRoster(roster, { names, today: '2026-11-18', closeMinutes: close });
+    expect(r).toMatchObject({ layout: 'grid', usedWeekStart: false, closeTimeMissing: false });
+    expect(simple(r)).toEqual([
+      '2026-11-17 11:00-16:00',
+      '2026-11-17 17:00-22:30',
+      '2026-11-18 17:00-22:30',
+      '2026-11-19 16:00-23:00',
+      '2026-11-20 16:00-23:00',
+    ]);
+  });
+
+  it('falls back to 10 PM and says so when closing times are not set', () => {
+    const r = parseRoster(roster, { names, today: '2026-11-18' });
+    expect(r.closeTimeMissing).toBe(true);
+    expect(simple(r)).toContain('2026-11-18 17:00-22:00');
+  });
+
+  it('picks the start that fits before closing', () => {
+    expect(resolveCloseStart({ h: 5, m: 0, suffix: null, is24: false }, 22 * 60 + 30)).toBe(17 * 60);
+    expect(resolveCloseStart({ h: 11, m: 0, suffix: null, is24: false }, 23 * 60)).toBe(11 * 60);
+    expect(resolveCloseStart({ h: 4, m: 0, suffix: 'pm', is24: false }, 23 * 60)).toBe(16 * 60);
   });
 });

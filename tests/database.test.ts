@@ -108,7 +108,8 @@ describe('migrations', () => {
   it('seeds the default expense categories', async () => {
     const db = await createTestDb();
     expect((await listCategories(db)).map((c) => c.name)).toEqual([
-      'Rent', 'Groceries', 'Transport', 'Electricity', 'Internet', 'Shopping', 'Entertainment', 'Education', 'Other',
+      // Eating Out (migration 5) shares sort_order 3 with Transport; ties sort by name.
+      'Rent', 'Groceries', 'Eating Out', 'Transport', 'Electricity', 'Internet', 'Shopping', 'Entertainment', 'Education', 'Other',
     ]);
   });
 });
@@ -199,7 +200,7 @@ describe('finance repository', () => {
 
     const totals = await expenseTotalsByCategory(db, nov);
     expect(totals[0]).toMatchObject({ name: 'Rent', totalCents: 45000 });
-    expect(totals).toHaveLength(9);
+    expect(totals).toHaveLength(10);
 
     await updateExpense(db, id, { categoryId: groceries!.id, amountCents: 2500, spentDate: '2026-11-05', description: 'Coles' });
     expect(await totalExpenses(db, nov)).toBe(47501);

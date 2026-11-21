@@ -83,14 +83,20 @@ function cleanExpense(input: ExpenseInput) {
  */
 const DUPLICATE_WINDOW_MS = 2 * 60_000;
 
-export async function createExpense(db: SqlDb, input: ExpenseInput): Promise<number> {
+/**
+ * `allowRepeat` skips the "just added this" duplicate check — for Apple Pay
+ * purchases, where two identical coffees in a row are both real.
+ */
+export async function createExpense(db: SqlDb, input: ExpenseInput, opts: { allowRepeat?: boolean } = {}): Promise<number> {
   const e = cleanExpense(input);
   const now = Date.now();
-  const dup = await db.getFirstAsync<{ id: number }>(
-    `SELECT id FROM expenses WHERE category_id = ? AND amount_cents = ? AND spent_date = ?
+  const dup = opts.allowRepeat
+    ? null
+    : await db.getFirstAsync<{ id: number }>(
+        `SELECT id FROM expenses WHERE category_id = ? AND amount_cents = ? AND spent_date = ?
        AND description = ? AND created_at > ?`,
-    [input.categoryId, input.amountCents, input.spentDate, e.description, now - DUPLICATE_WINDOW_MS],
-  );
+        [input.categoryId, input.amountCents, input.spentDate, e.description, now - DUPLICATE_WINDOW_MS],
+      );
   if (dup) throw new ValidationError('This looks like a duplicate of an expense you just added.');
   const r = await db.runAsync(
     `INSERT INTO expenses (category_id, amount_cents, spent_date, description, notes, created_at, updated_at)
@@ -350,4 +356,28 @@ export async function getIncome(db: SqlDb, id: number): Promise<Income | null> {
     workplaceId: r.workplace_id,
     notes: r.notes,
   };
+}
+
+// ── Apple Pay purchases waiting for an amount ───────────────────────────────
+
+export interface PendingPurchase {
+  id: number;
+  merchant: string;
+  card: string | null;
+  spentDate: DateKey;
+}
+
+export async function addPendingPurchase(db: SqlDb, merchant: string, card: string | null, spentDate: DateKey): Promise<void> {
+  await db.runAsync('INSERT INTO pending_purchases (merchant, card, spent_date, created_at) VALUES (?, ?, ?, ?)', [merchant.slice(0, 120), card || null, spentDate, Date.now()]);
+}
+
+export async function listPendingPurchases(db: SqlDb): Promise<PendingPurchase[]> {
+  const rows = await db.getAllAsync<{ id: number; merchant: string; card: string | null; spent_date: string }>(
+    'SELECT id, merchant, card, spent_date FROM pending_purchases ORDER BY spent_date DESC, id DESC',
+  );
+  return rows.map((r) => ({ id: r.id, merchant: r.merchant, card: r.card, spentDate: r.spent_date }));
+}
+
+export async function dismissPendingPurchase(db: SqlDb, id: number): Promise<void> {
+  await db.runAsync('DELETE FROM pending_purchases WHERE id = ?', [id]);
 }

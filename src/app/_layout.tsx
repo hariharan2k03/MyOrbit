@@ -1,4 +1,4 @@
-import { router, Stack } from 'expo-router';
+import { router, Stack, type Href } from 'expo-router';
 import * as SystemUI from 'expo-system-ui';
 import { useCallback, useEffect } from 'react';
 import { ActivityIndicator, Alert, AppState, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -86,6 +86,16 @@ function ThemedStack() {
         if (result.openTimer) router.push('/focus');
         if (result.timerBusy) Alert.alert('A timer is already running', 'Finish or end it before starting another.');
         if (result.added.length > 0) Alert.alert('Added from Siri', result.added.join('\n'));
+        if (result.pending > 0) {
+          Alert.alert(
+            result.pending === 1 ? 'An Apple Pay purchase needs its amount' : `${result.pending} Apple Pay purchases need their amount`,
+            'Wallet didn’t send the amount. Type it in once and it’s saved as an expense.',
+            [
+              { text: 'Later', style: 'cancel' },
+              { text: 'Add now', onPress: () => router.push('/apple-pay' as Href) },
+            ],
+          );
+        }
       })();
     run();
     const sub = AppState.addEventListener('change', (s) => {
@@ -201,6 +211,7 @@ function ThemedStack() {
         <Stack.Screen name="roster-import" options={{ ...modal, title: 'Upload Roster' }} />
         <Stack.Screen name="work-records" options={{ title: 'Work Records' }} />
         <Stack.Screen name="work-settings" options={{ title: 'Clock & Roster' }} />
+        <Stack.Screen name="apple-pay" options={{ title: 'Apple Pay Tracking' }} />
         <Stack.Screen name="calendar-feeds" options={{ title: 'Subscribed Calendars' }} />
         <Stack.Screen name="reminders" options={{ title: 'Reminders' }} />
         <Stack.Screen name="backup" options={{ title: 'Backup & Restore' }} />

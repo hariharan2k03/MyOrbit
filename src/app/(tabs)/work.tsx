@@ -24,19 +24,19 @@ type Tab = 'schedule' | 'hours' | 'salary';
 async function loadWork(db: SqlDb, anchor: DateKey, payAnchor: DateKey) {
   const now = Date.now();
   const week = weekRange(anchor);
-  const lastWeek = weekRange(addDays(anchor, -7));
   const month = monthRange(anchor);
   const fortnight = fortnightRange(anchor, payAnchor);
-  const [weekShifts, lastWeekShifts, monthShifts, fortnightShifts, workplaces, clockShift, monthIncome] = await Promise.all([
+  const lastFortnight = fortnightRange(addDays(fortnight.start, -14), payAnchor);
+  const [weekShifts, lastFortnightShifts, monthShifts, fortnightShifts, workplaces, clockShift, monthIncome] = await Promise.all([
     listShiftsInRange(db, week),
-    listShiftsInRange(db, lastWeek),
+    listShiftsInRange(db, lastFortnight),
     listShiftsInRange(db, month),
     listShiftsInRange(db, fortnight),
     listWorkplaces(db),
     getClockShift(db, now),
     listIncome(db, month),
   ]);
-  return { now, week, month, fortnight, weekShifts, lastWeekShifts, monthShifts, fortnightShifts, workplaces, clockShift, monthIncome };
+  return { now, week, month, fortnight, weekShifts, lastFortnightShifts, monthShifts, fortnightShifts, workplaces, clockShift, monthIncome };
 }
 
 const active = (shifts: Shift[]) => shifts.filter((s) => s.status !== 'cancelled');
@@ -95,19 +95,15 @@ export default function WorkScreen() {
   return (
     <Screen
       title="Work"
-      trailing={
-        <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-          <GradientTile icon="briefcase.fill" tone="work" size={52} />
-        </View>
-      }
+      trailing={<IconButton icon="gearshape" label="Clock & Roster settings" onPress={() => router.push('/work-settings' as Href)} />}
       onRefresh={() => void query.refresh()}
       refreshing={query.refreshing}
       overlay={<Fab label="Add shift" onPress={() => router.push('/shift/new')} />}
     >
       <Segmented
         options={[
-          { value: 'schedule', label: 'Schedule' },
-          { value: 'hours', label: 'Hours' },
+          { value: 'schedule', label: 'Overview' },
+          { value: 'hours', label: 'Shifts' },
           { value: 'salary', label: 'Salary' },
         ]}
         value={tab}
@@ -184,10 +180,8 @@ export default function WorkScreen() {
 
           if (tab === 'schedule') {
             const menu: { icon: string; tone: TileTone; title: string; subtitle: string; onPress: () => void }[] = [
-              { icon: 'doc.text.viewfinder', tone: 'sky', title: 'Upload Roster', subtitle: 'Photo, screenshot or PDF — only your shifts', onPress: () => router.push('/roster-import' as Href) },
               { icon: 'calendar', tone: 'accent', title: 'My Shifts', subtitle: `${active(d.weekShifts).length} this week`, onPress: () => router.push('/shifts' as Href) },
               { icon: 'list.clipboard.fill', tone: 'work', title: 'Work Records', subtitle: `${formatDuration(weekMin)} this week · clock in/out history`, onPress: () => router.push('/work-records' as Href) },
-              { icon: 'banknote.fill', tone: 'money', title: 'Salary & Payslips', subtitle: `${formatCents(weekNet.netCents)} est. take-home`, onPress: () => setTab('salary') },
               { icon: 'building.2.fill', tone: 'work', title: 'Workplaces & Pay Rates', subtitle: `${d.workplaces.length} ${d.workplaces.length === 1 ? 'workplace' : 'workplaces'}`, onPress: () => router.push('/workplaces' as Href) },
               {
                 icon: 'bell.badge.fill',
@@ -204,10 +198,50 @@ export default function WorkScreen() {
                 onPress: () => router.push('/work-settings' as Href),
               },
             ];
+            const fnActive = active(d.fortnightShifts);
+            const tiles: { icon: string; color: string; label: string; value: string; onPress: () => void }[] = [
+              { icon: 'calendar', color: colors.accent, label: 'This Week', value: `${(weekMin / 60).toFixed(1)} hrs`, onPress: () => setTab('hours') },
+              { icon: 'chart.bar.fill', color: colors.accent, label: 'This Fortnight', value: `${(paid(d.fortnightShifts) / 60).toFixed(1)} hrs`, onPress: () => setTab('hours') },
+              { icon: 'square.stack.3d.up.fill', color: colors.accent, label: 'Shifts', value: `${fnActive.length}`, onPress: () => router.push('/shifts' as Href) },
+              { icon: 'dollarsign.circle.fill', color: colors.warning, label: 'Earnings (Est.)', value: formatCents(gross(d.fortnightShifts)), onPress: () => setTab('salary') },
+            ];
             return (
               <>
                 <ClockCard shift={d.clockShift} />
                 {thisWeekCard}
+                <View style={styles.tiles}>
+                  {tiles.map((t) => (
+                    <Pressable
+                      key={t.label}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${t.label}: ${t.value}`}
+                      onPress={t.onPress}
+                      style={({ pressed }) => [styles.tile, { backgroundColor: colors.surface, borderColor: colors.border, opacity: pressed ? 0.7 : 1 }]}
+                    >
+                      <Icon name={t.icon} color={t.color} size={26} />
+                      <View style={{ flex: 1 }}>
+                        <Text variant="footnote" tone="secondary" numberOfLines={1}>
+                          {t.label}
+                        </Text>
+                        <Text variant="headline" numberOfLines={1} adjustsFontSizeToFit>
+                          {t.value}
+                        </Text>
+                      </View>
+                    </Pressable>
+                  ))}
+                </View>
+                <Card onPress={() => router.push('/roster-import' as Href)} accessibilityLabel="Upload Roster">
+                  <Row>
+                    <GradientTile icon="doc.text.viewfinder" tone="sky" size={44} />
+                    <View style={{ flex: 1 }}>
+                      <Text variant="headline">Upload Roster</Text>
+                      <Text variant="footnote" tone="secondary">
+                        Scan or select roster image — only your shifts
+                      </Text>
+                    </View>
+                    <Icon name="chevron.right" color={colors.textTertiary} size={12} />
+                  </Row>
+                </Card>
                 <Card style={{ paddingVertical: spacing.xs }}>
                   {menu.map((m, i) => (
                     <View key={m.title}>
@@ -221,15 +255,25 @@ export default function WorkScreen() {
           }
 
           if (tab === 'hours') {
-            const lastMin = paid(d.lastWeekShifts);
+            // Pay-fortnight comparison (same fortnights as Salary).
+            const fortnightMin = paid(d.fortnightShifts);
+            const lastMin = paid(d.lastFortnightShifts);
             return (
               <>
                 {weekNav}
                 {thisWeekCard}
                 <Card>
                   <Row align="start">
-                    <Stat label="vs last week" value={lastMin ? `${weekMin >= lastMin ? '+' : '−'}${formatDuration(Math.abs(weekMin - lastMin))}` : '—'} hint={lastMin ? formatDuration(lastMin) : 'No shifts'} />
-                    <Stat label={monthLabel(d.month.start)} value={formatDuration(paid(d.monthShifts))} hint="paid hours" />
+                    <Stat
+                      label={`Fortnight ${formatDateKey(d.fortnight.start)} – ${formatDateKey(addDays(d.fortnight.end, -1))}`}
+                      value={formatDuration(fortnightMin)}
+                      hint="paid hours"
+                    />
+                    <Stat
+                      label="vs last fortnight"
+                      value={lastMin ? `${fortnightMin >= lastMin ? '+' : '−'}${formatDuration(Math.abs(fortnightMin - lastMin))}` : '—'}
+                      hint={lastMin ? `${formatDuration(lastMin)} last fortnight` : 'No shifts'}
+                    />
                   </Row>
                 </Card>
                 <Card>
@@ -363,6 +407,8 @@ export default function WorkScreen() {
 }
 
 const styles = StyleSheet.create({
+  tiles: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
+  tile: { flexBasis: '47%', flexGrow: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.lg, borderRadius: radius.lg, borderWidth: StyleSheet.hairlineWidth },
   caps: { textTransform: 'uppercase', letterSpacing: 0.5 },
   dayRow: { flexDirection: 'row', gap: 6 },
   dayTile: { flex: 1, alignItems: 'center', paddingVertical: spacing.sm, borderRadius: radius.sm, borderWidth: StyleSheet.hairlineWidth, gap: 2 },

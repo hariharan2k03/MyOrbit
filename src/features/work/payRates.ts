@@ -13,6 +13,11 @@ export interface PayRates {
   nightCents: Cents | null;
   nightStartMin: number | null;
   nightEndMin: number | null;
+  /**
+   * Night start per weekday (index 0 = Sunday), overriding nightStartMin —
+   * e.g. night pay from 10 PM Mon–Wed but 10:30 PM Thu–Sun. Null = same every day.
+   */
+  nightStartByDay?: (number | null)[] | null;
 }
 
 export type PayKind = 'base' | 'night' | 'saturday' | 'sunday';
@@ -42,6 +47,20 @@ export const baseOnly = (baseCents: Cents): PayRates => ({
 function inWindow(minuteOfDay: number, start: number, end: number): boolean {
   if (start === end) return false;
   return start < end ? minuteOfDay >= start && minuteOfDay < end : minuteOfDay >= start || minuteOfDay < end;
+}
+
+/**
+ * Whether a minute is in the night window. For a window that wraps midnight,
+ * the evening part uses that day's start; the early-morning part belongs to
+ * the night before, so only the end time matters.
+ */
+function isNight(dow: number, minuteOfDay: number, rates: PayRates): boolean {
+  const end = rates.nightEndMin;
+  if (end === null) return false;
+  const start = rates.nightStartByDay?.[dow] ?? rates.nightStartMin;
+  if (start === null) return false;
+  if (start < end) return inWindow(minuteOfDay, start, end);
+  return minuteOfDay >= start || minuteOfDay < end;
 }
 
 /** Order used to break ties between equal rates (weekend beats night beats base). */
@@ -78,9 +97,7 @@ export function shiftPay(shift: { startAt: number; endAt: number; unpaidBreakMin
         rate = r;
       }
     };
-    if (rates.nightStartMin !== null && rates.nightEndMin !== null && inWindow(mod, rates.nightStartMin, rates.nightEndMin)) {
-      consider('night', rates.nightCents);
-    }
+    if (isNight(dow, mod, rates)) consider('night', rates.nightCents);
     if (dow === 6) consider('saturday', rates.saturdayCents);
     if (dow === 0) consider('sunday', rates.sundayCents);
 

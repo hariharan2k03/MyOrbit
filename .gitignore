@@ -15,10 +15,10 @@ expo-env.d.ts
 # Local build output and tooling
 build-device/
 build/
-.claude/
 node_modules.nosync/
 ios.nosync/
 build-device.nosync/
 node_modules
 /ios
 build-sim.nosync/
+.DS_Store

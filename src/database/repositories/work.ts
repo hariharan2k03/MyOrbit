@@ -20,6 +20,23 @@ export interface Workplace {
   nightRateCents: Cents | null;
   nightStartMin: number | null;
   nightEndMin: number | null;
+  /** Closing time per weekday (index 0 = Sunday), minutes after midnight — what "5-Close" on a roster ends at. */
+  closeByDay: (number | null)[] | null;
+  /** Night-pay start per weekday, overriding nightStartMin. */
+  nightStartByDay: (number | null)[] | null;
+}
+
+/** Reads a stored 7-day array, ignoring anything malformed. */
+export function parseByDay(json: string | null): (number | null)[] | null {
+  if (!json) return null;
+  try {
+    const a: unknown = JSON.parse(json);
+    if (!Array.isArray(a) || a.length !== 7) return null;
+    const ok = a.every((v) => v === null || (Number.isInteger(v) && v >= 0 && v < 1440));
+    return ok ? (a as (number | null)[]) : null;
+  } catch {
+    return null;
+  }
 }
 
 export type ShiftStatus = 'scheduled' | 'completed' | 'cancelled';
@@ -55,6 +72,7 @@ interface PenaltyRow {
   night_rate_cents: number | null;
   night_start_min: number | null;
   night_end_min: number | null;
+  night_start_by_day: string | null;
 }
 
 interface WorkplaceRow extends PenaltyRow {
@@ -65,6 +83,7 @@ interface WorkplaceRow extends PenaltyRow {
   color: string;
   notes: string | null;
   archived: number;
+  close_by_day: string | null;
 }
 
 interface ShiftRow extends PenaltyRow {
@@ -101,6 +120,8 @@ const toWorkplace = (r: WorkplaceRow): Workplace => ({
   nightRateCents: r.night_rate_cents,
   nightStartMin: r.night_start_min,
   nightEndMin: r.night_end_min,
+  closeByDay: parseByDay(r.close_by_day),
+  nightStartByDay: parseByDay(r.night_start_by_day),
 });
 
 const toShift = (r: ShiftRow): Shift => ({
@@ -123,6 +144,7 @@ const toShift = (r: ShiftRow): Shift => ({
     nightCents: r.night_rate_cents,
     nightStartMin: r.night_start_min,
     nightEndMin: r.night_end_min,
+    nightStartByDay: parseByDay(r.night_start_by_day),
   },
   clockInAt: r.clock_in_at,
   clockOutAt: r.clock_out_at,
@@ -143,6 +165,16 @@ export interface WorkplaceInput {
   nightRateCents?: Cents | null;
   nightStartMin?: number | null;
   nightEndMin?: number | null;
+  closeByDay?: (number | null)[] | null;
+  nightStartByDay?: (number | null)[] | null;
+}
+
+function byDayJson(days: (number | null)[] | null | undefined): string | null {
+  if (!days || days.every((d) => d === null)) return null;
+  if (days.length !== 7 || !days.every((d) => d === null || (Number.isInteger(d) && d >= 0 && d < 1440))) {
+    throw new ValidationError('Times by day must be valid times.');
+  }
+  return JSON.stringify(days);
 }
 
 function cleanWorkplace(input: WorkplaceInput) {
@@ -167,6 +199,8 @@ function cleanWorkplace(input: WorkplaceInput) {
     night,
     nightStart: night === null ? null : start,
     nightEnd: night === null ? null : end,
+    closeByDay: byDayJson(input.closeByDay),
+    nightStartByDay: night === null ? null : byDayJson(input.nightStartByDay),
     name: unwrap(cleanText(input.name, 'Workplace name', LIMITS.name, { required: true })),
     address: unwrap(cleanText(input.address, 'Address', LIMITS.title)) || null,
     notes: unwrap(cleanText(input.notes, 'Notes', LIMITS.notes)) || null,
@@ -187,9 +221,9 @@ export async function createWorkplace(db: SqlDb, input: WorkplaceInput): Promise
   try {
     const r = await db.runAsync(
       `INSERT INTO workplaces (name, default_rate_cents, address, color, notes, saturday_rate_cents, sunday_rate_cents,
-         night_rate_cents, night_start_min, night_end_min, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [w.name, input.defaultRateCents, w.address, w.color, w.notes, w.saturday, w.sunday, w.night, w.nightStart, w.nightEnd, now, now],
+         night_rate_cents, night_start_min, night_end_min, close_by_day, night_start_by_day, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [w.name, input.defaultRateCents, w.address, w.color, w.notes, w.saturday, w.sunday, w.night, w.nightStart, w.nightEnd, w.closeByDay, w.nightStartByDay, now, now],
     );
     return r.lastInsertRowId;
   } catch (e) {
@@ -202,8 +236,9 @@ export async function updateWorkplace(db: SqlDb, id: number, input: WorkplaceInp
   const w = cleanWorkplace(input);
   await db.runAsync(
     `UPDATE workplaces SET name = ?, default_rate_cents = ?, address = ?, color = ?, notes = ?, saturday_rate_cents = ?,
-       sunday_rate_cents = ?, night_rate_cents = ?, night_start_min = ?, night_end_min = ?, updated_at = ? WHERE id = ?`,
-    [w.name, input.defaultRateCents, w.address, w.color, w.notes, w.saturday, w.sunday, w.night, w.nightStart, w.nightEnd, Date.now(), id],
+       sunday_rate_cents = ?, night_rate_cents = ?, night_start_min = ?, night_end_min = ?, close_by_day = ?, night_start_by_day = ?,
+       updated_at = ? WHERE id = ?`,
+    [w.name, input.defaultRateCents, w.address, w.color, w.notes, w.saturday, w.sunday, w.night, w.nightStart, w.nightEnd, w.closeByDay, w.nightStartByDay, Date.now(), id],
   );
 }
 
@@ -219,7 +254,7 @@ export async function removeWorkplace(db: SqlDb, id: number): Promise<'deleted' 
 }
 
 const SHIFT_SELECT = `SELECT s.*, w.name AS workplace_name, w.color AS workplace_color,
-  w.saturday_rate_cents, w.sunday_rate_cents, w.night_rate_cents, w.night_start_min, w.night_end_min
+  w.saturday_rate_cents, w.sunday_rate_cents, w.night_rate_cents, w.night_start_min, w.night_end_min, w.night_start_by_day
   FROM work_shifts s JOIN workplaces w ON w.id = s.workplace_id`;
 
 export interface ShiftSaveInput extends ShiftInput {

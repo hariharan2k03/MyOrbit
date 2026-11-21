@@ -8,6 +8,11 @@ import { centsToInput, parseMoneyToCents } from '@/utils/money';
 import { unwrap } from '@/utils/result';
 import { formatMinutesAsTime, parseTime } from '@/utils/time';
 
+// Days are grouped the way rosters and awards usually differ: Mon–Wed vs Thu–Sun.
+const EARLY_DAYS = [1, 2, 3]; // Mon, Tue, Wed (0 = Sunday)
+const byGroups = (monWed: number | null, thuSun: number | null): (number | null)[] =>
+  Array.from({ length: 7 }, (_, d) => (EARLY_DAYS.includes(d) ? monWed : thuSun));
+
 /** Blank → no penalty; otherwise a validated hourly amount. */
 function optionalRate(input: string): number | null {
   return input.trim() ? unwrap(parseMoneyToCents(input)) : null;
@@ -28,6 +33,10 @@ export default function WorkplaceForm() {
   const [night, setNight] = useState('');
   const [nightStart, setNightStart] = useState('19:00');
   const [nightEnd, setNightEnd] = useState('07:00');
+  const [nightStartLate, setNightStartLate] = useState('19:00');
+  const [closeOn, setCloseOn] = useState(false);
+  const [closeEarly, setCloseEarly] = useState('22:00');
+  const [closeLate, setCloseLate] = useState('22:00');
 
   useEffect(() => {
     if (isNew) return;
@@ -45,6 +54,16 @@ export default function WorkplaceForm() {
       if (w.nightRateCents !== null) setNight(centsToInput(w.nightRateCents));
       if (w.nightStartMin !== null) setNightStart(formatMinutesAsTime(w.nightStartMin));
       if (w.nightEndMin !== null) setNightEnd(formatMinutesAsTime(w.nightEndMin));
+      // Mon–Wed starts come from Monday, Thu–Sun from Thursday.
+      const nightMon = w.nightStartByDay?.[1] ?? w.nightStartMin;
+      const nightThu = w.nightStartByDay?.[4] ?? w.nightStartMin;
+      if (nightMon !== null) setNightStart(formatMinutesAsTime(nightMon));
+      if (nightThu !== null) setNightStartLate(formatMinutesAsTime(nightThu));
+      const closeMon = w.closeByDay?.[1] ?? null;
+      const closeThu = w.closeByDay?.[4] ?? null;
+      setCloseOn(closeMon !== null || closeThu !== null);
+      if (closeMon !== null) setCloseEarly(formatMinutesAsTime(closeMon));
+      if (closeThu !== null) setCloseLate(formatMinutesAsTime(closeThu));
     });
   }, [db, id, isNew]);
 
@@ -60,6 +79,8 @@ export default function WorkplaceForm() {
       nightRateCents: nightOn ? unwrap(parseMoneyToCents(night)) : null,
       nightStartMin: nightOn ? unwrap(parseTime(nightStart)) : null,
       nightEndMin: nightOn ? unwrap(parseTime(nightEnd)) : null,
+      nightStartByDay: nightOn ? byGroups(unwrap(parseTime(nightStart)), unwrap(parseTime(nightStartLate))) : null,
+      closeByDay: closeOn ? byGroups(unwrap(parseTime(closeEarly)), unwrap(parseTime(closeLate))) : null,
     };
     if (isNew) await createWorkplace(db, input);
     else await updateWorkplace(db, Number(id), input);
@@ -90,8 +111,22 @@ export default function WorkplaceForm() {
         {nightOn ? (
           <>
             <MoneyField label="Night rate" value={night} onChangeText={setNight} />
-            <TimeField label="Night starts" value={nightStart} onChange={setNightStart} />
+            <TimeField label="Night starts Mon–Wed" value={nightStart} onChange={setNightStart} />
+            <TimeField label="Night starts Thu–Sun" value={nightStartLate} onChange={setNightStartLate} />
             <TimeField label="Night ends" value={nightEnd} onChange={setNightEnd} last />
+          </>
+        ) : null}
+      </FormSection>
+
+      <FormSection
+        title="Closing time"
+        footer="What a “Close” shift on your roster ends at — e.g. 5-Close on a Monday becomes 5:00 PM – 10:30 PM."
+      >
+        <SwitchField label="Rosters say “Close”" value={closeOn} onChange={setCloseOn} last={!closeOn} />
+        {closeOn ? (
+          <>
+            <TimeField label="Close Mon–Wed" value={closeEarly} onChange={setCloseEarly} />
+            <TimeField label="Close Thu–Sun" value={closeLate} onChange={setCloseLate} last />
           </>
         ) : null}
       </FormSection>

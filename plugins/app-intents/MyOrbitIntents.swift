@@ -10,7 +10,8 @@ import Foundation
 
 private enum ActionQueue {
   static let key = "myorbit.pendingActions"
-  static let limit = 50
+  // Apple Pay purchases can pile up for days before MyOrbit is opened.
+  static let limit = 300
 
   static func push(_ action: [String: Any]) throws {
     guard let group = Bundle.main.object(forInfoDictionaryKey: "ExpoWidgetsAppGroupIdentifier") as? String,
@@ -24,6 +25,18 @@ private enum ActionQueue {
     var queue = defaults.stringArray(forKey: key) ?? []
     queue.append(json)
     defaults.set(Array(queue.suffix(limit)), forKey: key)
+  }
+
+  /// The last Apple Pay automation run, so MyOrbit can show whether it fired
+  /// and what Wallet passed in (a run that fails otherwise leaves no trace).
+  static func recordApplePayRun(_ info: [String: Any]) {
+    guard let group = Bundle.main.object(forInfoDictionaryKey: "ExpoWidgetsAppGroupIdentifier") as? String,
+          let defaults = UserDefaults(suiteName: group) else { return }
+    var entry = info
+    entry["at"] = Int(Date().timeIntervalSince1970 * 1000)
+    if let data = try? JSONSerialization.data(withJSONObject: entry), let json = String(data: data, encoding: .utf8) {
+      defaults.set(json, forKey: "myorbit.applePayLastRun")
+    }
   }
 
   static func today() -> String {
@@ -94,6 +107,69 @@ struct AddExpenseIntent: AppIntent {
     try ActionQueue.push(["type": "addExpense", "amountCents": cents, "description": String(note.prefix(120)), "date": ActionQueue.today()])
     let dollars = String(format: "$%.2f", Double(cents) / 100)
     return .result(dialog: "Saved \(dollars) for \(note). It’ll show in MyOrbit next time you open it.")
+  }
+}
+
+/// Run by a Shortcuts "Transaction" (Wallet) automation each time you pay
+/// with Apple Pay, so purchases are logged without opening MyOrbit.
+struct LogApplePayPurchaseIntent: AppIntent {
+  static let title: LocalizedStringResource = "Log Apple Pay Purchase"
+  static let description = IntentDescription(
+    "Saves an Apple Pay purchase as an expense and picks a category from the store name. Use it in a Wallet transaction automation: set Merchant, Amount and Card from the Shortcut Input."
+  )
+  static let openAppWhenRun = false
+
+  /// Optional: some transactions arrive without a store name, and a required
+  /// parameter would stop a "Run Immediately" automation without saving anything.
+  @Parameter(title: "Merchant")
+  var merchant: String?
+
+  /// Text, because the Wallet trigger gives a currency value like "A$12.50".
+  /// Optional: Wallet sometimes sends no amount (it isn't final at the tap).
+  @Parameter(title: "Amount")
+  var amount: String?
+
+  @Parameter(title: "Card")
+  var card: String?
+
+  static var parameterSummary: some ParameterSummary {
+    Summary("Log \(\.$amount) at \(\.$merchant)") {
+      \.$card
+    }
+  }
+
+  func perform() async throws -> some IntentResult {
+    let name = (merchant ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    let amountText = amount ?? ""
+    let raw: [String: Any] = ["merchant": String(name.prefix(120)), "amount": String(amountText.prefix(40)), "card": String((card ?? "").prefix(60))]
+    guard let cents = Self.cents(from: amountText), cents > 0 else {
+      // No usable amount: keep the purchase anyway so MyOrbit can ask for it.
+      ActionQueue.recordApplePayRun(raw.merging(["result": "noAmount"]) { $1 })
+      try ActionQueue.push([
+        "type": "pendingPurchase",
+        "merchant": String((name.isEmpty ? "Apple Pay" : name).prefix(120)),
+        "card": String((card ?? "").prefix(60)),
+        "date": ActionQueue.today(),
+      ])
+      return .result()
+    }
+    ActionQueue.recordApplePayRun(raw.merging(["result": "saved", "amountCents": cents]) { $1 })
+    try ActionQueue.push([
+      "type": "logPurchase",
+      "amountCents": cents,
+      "merchant": String((name.isEmpty ? "Apple Pay" : name).prefix(120)),
+      "card": String((card ?? "").prefix(60)),
+      "date": ActionQueue.today(),
+    ])
+    return .result()
+  }
+
+  /// "A$12.50", "$1,234.5", "12.50 AUD" → cents. Refunds (negative) are ignored.
+  static func cents(from text: String) -> Int? {
+    if text.contains("-") { return nil }
+    let cleaned = text.filter { "0123456789.,".contains($0) }.replacingOccurrences(of: ",", with: "")
+    guard let value = Double(cleaned), value.isFinite, value <= 100_000 else { return nil }
+    return Int((value * 100).rounded())
   }
 }
 

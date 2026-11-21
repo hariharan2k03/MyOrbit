@@ -103,3 +103,23 @@ describe('fortnightly pay periods', () => {
     expect(fortnightRange('2026-11-07', '2027-03-01')).toEqual(fortnightRange('2026-11-07', '2026-01-05'));
   });
 });
+
+describe('night pay that starts at different times on different days', () => {
+  // Mon–Wed from 10 PM, Thu–Sun from 10:30 PM; ends 6 AM.
+  const byDay: PayRates = { ...rates, saturdayCents: null, sundayCents: null, nightStartMin: 22 * 60, nightEndMin: 6 * 60, nightStartByDay: [1350, 1320, 1320, 1320, 1350, 1350, 1350] };
+
+  it('uses the weekday’s own start', () => {
+    // Tue 10 Nov 2026, 5:00–10:30 PM: 30 min of night.
+    const tue = shiftPay({ startAt: at(2026, 11, 10, 17), endAt: at(2026, 11, 10, 22, 30), unpaidBreakMinutes: 0 }, byDay);
+    expect(tue.segments.find((s) => s.kind === 'night')?.minutes).toBe(30);
+    // Thu 12 Nov 2026, 5:00–11:00 PM: 30 min of night (from 10:30).
+    const thu = shiftPay({ startAt: at(2026, 11, 12, 17), endAt: at(2026, 11, 12, 23), unpaidBreakMinutes: 0 }, byDay);
+    expect(thu.segments.find((s) => s.kind === 'night')?.minutes).toBe(30);
+  });
+
+  it('keeps paying night after midnight until it ends', () => {
+    // Wed 11 Nov 10 PM – Thu 12 Nov 1 AM: all 3 hours are night (the Thursday start doesn't apply after midnight).
+    const p = shiftPay({ startAt: at(2026, 11, 11, 22), endAt: at(2026, 11, 12, 1), unpaidBreakMinutes: 0 }, byDay);
+    expect(p.segments).toEqual([{ kind: 'night', rateCents: 3600, minutes: 180, cents: 10800 }]);
+  });
+});

@@ -1,4 +1,4 @@
-import { router } from 'expo-router';
+import { router, type Href } from 'expo-router';
 import { useState } from 'react';
 import { ActionSheetIOS, Pressable, StyleSheet, View } from 'react-native';
 import { Segmented } from '@/components/form';
@@ -134,6 +134,16 @@ export default function FinanceScreen() {
                 <ActionTile icon="minus" tone="expense" label="Add Expense" onPress={() => router.push('/expense/new')} />
                 <ActionTile icon="chart.pie.fill" tone="accent" label="Budgets" onPress={() => router.push('/budget/overall')} />
               </View>
+
+              <Card style={{ paddingVertical: 4 }}>
+                <ListRow
+                  icon="wave.3.right"
+                  tone="money"
+                  title="Auto-track Apple Pay"
+                  subtitle="Every tap saved as an expense, category picked for you"
+                  onPress={() => router.push('/apple-pay' as Href)}
+                />
+              </Card>
 
               <Card>
                 <SectionHeader title={period === 'week' ? 'This Week' : 'This Month'} />

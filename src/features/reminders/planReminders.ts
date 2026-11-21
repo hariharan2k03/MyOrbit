@@ -39,8 +39,8 @@ export function leadLabel(minutes: number): string {
 type Prefs = Pick<AppSettings, 'notificationsEnabled' | 'shiftReminderMinutes' | 'remindAssessments' | 'remindTasks' | 'remindHabits' | 'habitReminderTime'> &
   Partial<Pick<AppSettings, 'remindClock' | 'clockInEarlyMinutes' | 'clockOutEarlyMinutes'>>;
 
-/** If you're still clocked in this long after a shift's rostered finish, you get a nudge. */
-export const FORGOT_CLOCK_OUT_MINUTES = 15;
+/** When you're still clocked in at a shift's rostered finish, a Clock Out notification arrives this many minutes after it. */
+export const FORGOT_CLOCK_OUT_MINUTES = 0;
 
 /**
  * Works out every reminder that should be pending right now, from the data.
@@ -74,7 +74,7 @@ export async function planReminders(db: SqlDb, prefs: Prefs, now = Date.now()): 
       }
       const forgot = s.endAt + FORGOT_CLOCK_OUT_MINUTES * 60_000;
       if (s.clockInAt !== null && s.clockOutAt === null && forgot > now) {
-        out.push({ ...shift, kind: 'clock_out_late', fireAt: forgot, title: 'Still clocked in?', body: `Your ${s.workplaceName} shift finished at ${formatClock(s.endAt)}. Clock out so your hours are right.`, categoryId: 'clock-out' });
+        out.push({ ...shift, kind: 'clock_out_late', fireAt: forgot, title: 'Shift finished — clock out', body: `Your ${s.workplaceName} shift finished at ${formatClock(s.endAt)}. Hold or swipe this to tap Clock Out.`, categoryId: 'clock-out' });
       }
     }
   }

@@ -57,7 +57,10 @@ export function diffRoster(existing: Shift[], drafts: RosterDraft[]): RosterChan
       continue;
     }
     used.add(match.id);
-    if (match.startAt === t.startAt && match.endAt === t.endAt) out.push({ kind: 'same', draft, existing: match });
+    // A shift you've already worked (clocked or marked completed) keeps its real
+    // times — a roster for a past week must never overwrite what you worked.
+    const worked = match.status === 'completed' || match.clockInAt !== null;
+    if (worked || (match.startAt === t.startAt && match.endAt === t.endAt)) out.push({ kind: 'same', draft, existing: match });
     else out.push({ kind: 'changed', draft, existing: match });
   }
   for (const s of pool) {

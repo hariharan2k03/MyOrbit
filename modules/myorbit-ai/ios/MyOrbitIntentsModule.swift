@@ -19,5 +19,14 @@ public class MyOrbitIntentsModule: Module {
       defaults.removeObject(forKey: Self.key)
       return actions
     }
+
+    /// JSON describing the last Apple Pay automation run, or nil if it never ran.
+    Function("lastApplePayRun") { () -> String? in
+      guard let group = Bundle.main.object(forInfoDictionaryKey: "ExpoWidgetsAppGroupIdentifier") as? String,
+            let defaults = UserDefaults(suiteName: group) else {
+        return nil
+      }
+      return defaults.string(forKey: "myorbit.applePayLastRun")
+    }
   }
 }

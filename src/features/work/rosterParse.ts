@@ -44,6 +44,8 @@ export interface RosterParseResult {
   usedWeekStart: boolean;
   /** The recognised text, row by row, for "Show what was read". */
   text: string;
+  /** Some shifts ended at "Close" but the workplace has no closing time, so 10:00 PM was assumed. */
+  closeTimeMissing: boolean;
 }
 
 export interface RosterParseOptions {
@@ -52,7 +54,12 @@ export interface RosterParseOptions {
   today: DateKey;
   /** Monday (or first day) of the roster week, for rosters that only say "Mon", "Tue"… */
   weekStart?: DateKey;
+  /** The workplace's closing time on a date (minutes after midnight), for shifts like "5-Close". */
+  closeMinutes?: (date: DateKey) => number | null;
 }
+
+/** Used for "…-Close" when the workplace has no closing time set. */
+export const DEFAULT_CLOSE_MIN = 22 * 60;
 
 // ─── Times ──────────────────────────────────────────────────────────────────
 
@@ -66,6 +73,9 @@ interface ClockToken {
 
 const TIME = String.raw`(\d{1,2}(?:[:.]\d{2})?|\d{3,4})\s*(a\.?m\.?|p\.?m\.?|a|p)?(?![a-z])`;
 const RANGE_RE = new RegExp(String.raw`(?<![\d:.])${TIME}\s*(?:-|–|—|~|to|till|until)\s*${TIME}`, 'gi');
+/** "5-Close", "4 - close (cook)": the end is the workplace's closing time that day. */
+const CLOSE_RE = new RegExp(String.raw`(?<![\d:.])${TIME}\s*(?:-|–|—|~|to|till|until)\s*c[l1i][a-z]{0,3}\b`, 'gi');
+
 /** A single clock time, used when a cell has start and finish on separate lines. */
 const CLOCK_RE = /(?<![\d:./-])(\d{1,2})(?:[:.](\d{2}))\s*(a\.?m\.?|p\.?m\.?|a|p)?(?![\d:])|(?<![\d:./-])(\d{1,2})\s*(a\.?m\.?|p\.?m\.?)(?![a-z])/gi;
 
@@ -124,6 +134,18 @@ export function resolveRange(a: ClockToken, b: ClockToken): { start: number; end
     }
   }
   return best ? { start: best.start, end: best.end } : null;
+}
+
+/** "5-Close" with close at 22:30 → 17:00 (the shortest shift that fits), "11-Close" → 11:00. */
+export function resolveCloseStart(t: ClockToken, closeMin: number): number | null {
+  const starts = t.suffix ? [to24(t, t.suffix)] : t.is24 ? [(t.h % 24) * 60 + t.m] : [to24(t, 'am'), to24(t, 'pm')];
+  let best: number | null = null;
+  for (const start of starts) {
+    const d = span(start, closeMin);
+    if (d === 0 || d > MAX_SHIFT) continue;
+    if (best === null || d < span(best, closeMin)) best = start;
+  }
+  return best;
 }
 
 export const minutesToHHMM = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
@@ -277,6 +299,8 @@ interface Piece {
   h: number;
   text: string;
   range?: { start: number; end: number };
+  /** For "…-Close": the start time; the end comes from the closing time that day. */
+  closeStart?: ClockToken;
   clock?: ClockToken;
   date?: DateInfo;
 }
@@ -314,6 +338,10 @@ function piecesOf(lines: OcrLine[], names: string[]): Piece[] {
       const r = a && b ? resolveRange(a, b) : null;
       if (r) add('range', m.index, m.index + m[0].length, { range: r });
     }
+    for (const m of remaining().matchAll(CLOSE_RE)) {
+      const a = parseClock(m[1]!, m[2]);
+      if (a) add('range', m.index, m.index + m[0].length, { closeStart: a });
+    }
     for (const m of remaining().matchAll(TEXT_DATE_RE)) {
       const info: DateInfo = m[1]
         ? { weekday: weekdayOf(m[1]), day: m[2] ? Number(m[2]) : undefined, month: m[3] ? monthOf(m[3]) : undefined, year: fullYear(m[4]) }
@@ -330,7 +358,20 @@ function piecesOf(lines: OcrLine[], names: string[]): Piece[] {
     if (name) add('name', name.start, name.end);
     for (const m of remaining().matchAll(OFF_RE)) add('off', m.index, m.index + m[0].length);
   });
-  return mergeAdjacentDates(out, lines);
+  const merged = mergeAdjacentDates(out, lines);
+  // A header cell like "Mon (9.30 PM)" or "16-Nov" names one day: use the whole
+  // cell's width for its position, not just the characters of the date.
+  const byLine = new Map<number, Piece[]>();
+  for (const p of merged) byLine.set(p.line, [...(byLine.get(p.line) ?? []), p]);
+  for (const [li, ps] of byLine) {
+    const dates = ps.filter((p) => p.kind === 'date');
+    if (dates.length !== 1 || ps.some((p) => p.kind === 'range' || p.kind === 'name')) continue;
+    const l = lines[li]!;
+    dates[0]!.x0 = l.x;
+    dates[0]!.x1 = l.x + l.width;
+    dates[0]!.xc = l.x + l.width / 2;
+  }
+  return merged;
 }
 
 
@@ -398,58 +439,91 @@ function slopeOf(points: { xc: number; yc: number }[]): number {
 
 // ─── Layouts ────────────────────────────────────────────────────────────────
 
-interface Found {
-  date: DateInfo;
-  start: number;
-  end: number;
-  source: string;
-}
+type CellTime = { start: number; end: number; source: string } | { closeStart: ClockToken; source: string };
+type Found = { date: DateInfo } & CellTime;
 
-/** The time in one cell: a range, or two clock times stacked on separate lines. */
-function cellTime(candidates: Piece[], targetY: number, tol: number): { start: number; end: number; source: string } | null {
-  const near = candidates.filter((p) => Math.abs(p.yc - targetY) <= tol).sort((a, b) => Math.abs(a.yc - targetY) - Math.abs(b.yc - targetY));
-  const first = near[0];
-  if (!first || first.kind === 'off') return null;
-  if (first.kind === 'range') return { ...first.range!, source: first.text };
-  const clocks = near.filter((p) => p.kind === 'clock').slice(0, 2).sort((a, b) => a.yc - b.yc || a.x0 - b.x0);
+const timeOf = (p: Piece): CellTime => (p.closeStart ? { closeStart: p.closeStart, source: p.text } : { ...p.range!, source: p.text });
+
+/**
+ * Every shift in one cell — usually one range, but split shifts ("11-4.00/" over
+ * "5-Close") have two — or two clock times stacked on separate lines.
+ */
+function cellTimes(inCell: Piece[]): CellTime[] {
+  const sorted = [...inCell].sort((a, b) => a.yc - b.yc || a.x0 - b.x0);
+  const ranges = sorted.filter((p) => p.kind === 'range');
+  if (ranges.length) return ranges.map(timeOf);
+  const clocks = sorted.filter((p) => p.kind === 'clock').slice(0, 2);
   if (clocks.length === 2) {
     const r = resolveRange(clocks[0]!.clock!, clocks[1]!.clock!);
-    if (r) return { ...r, source: `${clocks[0]!.text}–${clocks[1]!.text}` };
+    if (r) return [{ ...r, source: `${clocks[0]!.text}–${clocks[1]!.text}` }];
   }
-  return null;
+  return [];
 }
 
-/** Typical distance between rows that start in the same column as `anchor` (e.g. the names column). */
-function rowPitch(lines: OcrLine[], anchor: { x0: number; x1: number }, fallback: number): number {
-  const ys = lines
-    .filter((l) => l.x < anchor.x1 && l.x + l.width > anchor.x0)
-    .map((l) => l.y + l.height / 2)
-    .sort((a, b) => a - b);
-  const gaps = ys.slice(1).map((y, i) => y - ys[i]!).filter((g) => g > fallback * 0.3);
-  return gaps.length ? median(gaps) : fallback * 3;
+/** The nearest pieces to `targetY` (within tol), keeping all those at about the same distance. */
+function nearestCell(candidates: Piece[], targetY: number, tol: number): Piece[] {
+  const near = candidates.filter((p) => Math.abs(p.yc - targetY) <= tol);
+  if (near.some((p) => p.kind === 'off') && !near.some((p) => p.kind === 'range')) return [];
+  return near;
+}
+
+/**
+ * The vertical band of the user's row: from just below the name above to just
+ * below their own name (or halfway to the next). Spreadsheet rosters put names
+ * at the bottom of tall cells, with a split shift's first line above the name,
+ * so the band reaches further up than down.
+ */
+function rowBand(name: Piece, lines: OcrLine[], lineH: number): { top: number; bottom: number } {
+  const nameLine = lines[name.line]!;
+  const column = lines
+    .filter((l) => l !== nameLine && Math.abs(l.x - nameLine.x) < 0.03)
+    .map((l) => l.y + l.height / 2);
+  const above = column.filter((y) => y < name.yc - lineH * 0.4);
+  const below = column.filter((y) => y > name.yc + lineH * 0.4);
+  const prev = above.length ? Math.max(...above) : null;
+  const next = below.length ? Math.min(...below) : null;
+  // The row above ends just below its name (its cells sit level with or above it).
+  const top = prev !== null ? Math.min(prev + lineH * 0.6, name.yc - lineH * 0.6) : name.yc - lineH * 2.2;
+  const bottom = Math.min(name.yc + lineH * 0.75, next !== null ? (next + name.yc) / 2 : Infinity);
+  return { top, bottom };
 }
 
 /** Team grid: days across the top, the user's row below. */
 function fromGrid(pieces: Piece[], name: Piece, lineH: number, lines: OcrLine[]): Found[] | null {
   const headers = rowsOf(pieces.filter((p) => p.kind === 'date' && p.yc < name.yc - lineH * 0.4)).filter((r) => r.length >= 3);
   // The header nearest above this name (a fortnight roster has one per week).
-  const header = headers.sort((a, b) => median(b.map((p) => p.yc)) - median(a.map((p) => p.yc)))[0];
+  const byNearest = headers.sort((a, b) => median(b.map((p) => p.yc)) - median(a.map((p) => p.yc)));
+  const header = byNearest[0];
   if (!header) return null;
-  const cols = [...header].sort((a, b) => a.xc - b.xc);
+  const cols = [...header].sort((a, b) => a.xc - b.xc).map((p) => ({ ...p, date: { ...p.date! } }));
+
+  // A second header row just above ("16-Nov" over "Mon (9.30 PM)") fills in
+  // whatever this one lacks — usually the dates for a weekday-only row.
+  const second = byNearest[1];
+  if (second && median(header.map((p) => p.yc)) - median(second.map((p) => p.yc)) < lineH * 5) {
+    for (const extra of second) {
+      const i = cols.findIndex((c, k) => extra.xc >= c.x0 - lineH && (k === cols.length - 1 || extra.xc < cols[k + 1]!.x0));
+      const col = cols[i];
+      if (!col) continue;
+      const d = extra.date!;
+      col.date = { weekday: col.date.weekday ?? d.weekday, day: col.date.day ?? d.day, month: col.date.month ?? d.month, year: col.date.year ?? d.year };
+    }
+  }
+
   const pitch = median(cols.slice(1).map((c, i) => c.xc - cols[i]!.xc)) || 0.1;
   const slope = slopeOf(cols);
-  const tol = Math.min(lineH * 1.3, rowPitch(lines, name, lineH) * 0.5);
+  const band = rowBand(name, lines, lineH);
   const cells = pieces.filter((p) => (p.kind === 'range' || p.kind === 'clock' || p.kind === 'off') && p.xc > name.x1 - pitch * 0.2);
   const out: Found[] = [];
   for (const col of cols) {
     // Follow the header's tilt from the name across to this column.
-    const y = name.yc + slope * (col.xc - name.xc);
-    const inCol = cells.filter((p) => {
+    const dy = slope * (col.xc - name.xc);
+    const inCell = cells.filter((p) => {
       const nearest = cols.reduce((best, c) => (Math.abs(c.xc - p.xc) < Math.abs(best.xc - p.xc) ? c : best));
-      return nearest === col && Math.abs(p.xc - col.xc) <= pitch * 0.75;
+      return nearest === col && Math.abs(p.xc - col.xc) <= pitch * 0.75 && p.yc > band.top + dy && p.yc <= band.bottom + dy;
     });
-    const t = cellTime(inCol, y, tol);
-    if (t) out.push({ date: col.date!, ...t });
+    if (inCell.some((p) => p.kind === 'off') && !inCell.some((p) => p.kind === 'range')) continue;
+    for (const t of cellTimes(inCell)) out.push({ date: col.date, ...t });
   }
   return out;
 }
@@ -470,8 +544,7 @@ function fromColumns(pieces: Piece[], name: Piece, lineH: number, lines: OcrLine
   const tol = Math.min(lineH * 1.3, pitch * 0.5);
   const out: Found[] = [];
   for (const day of dayRows) {
-    const t = cellTime(cells, day.yc, tol);
-    if (t) out.push({ date: day.date!, ...t });
+    for (const t of cellTimes(nearestCell(cells, day.yc, tol))) out.push({ date: day.date!, ...t });
   }
   return out;
 }
@@ -488,7 +561,7 @@ function fromList(pieces: Piece[], onlyNameRows: boolean): Found[] {
     if (date) context = date.date!;
     if (ranges.length === 0 || !context) continue;
     if (onlyNameRows && !sorted.some((p) => p.kind === 'name')) continue;
-    for (const r of ranges) out.push({ date: context, ...r.range!, source: r.text });
+    for (const r of ranges) out.push({ date: context, ...timeOf(r) });
   }
   return out;
 }
@@ -555,18 +628,32 @@ export function parseRoster(lines: OcrLine[], opts: RosterParseOptions): RosterP
   }
 
   let usedWeekStart = false;
+  let closeTimeMissing = false;
   const seen = new Set<string>();
   const shifts: ParsedRosterShift[] = [];
   for (const f of found) {
     const r = resolveDate(f.date, opts.today, opts.weekStart);
     if (!r || Math.abs(diffDays(opts.today, r.date)) > 120) continue;
+    let start: number;
+    let end: number;
+    if ('closeStart' in f) {
+      const close = opts.closeMinutes?.(r.date) ?? null;
+      if (close === null) closeTimeMissing = true;
+      end = close ?? DEFAULT_CLOSE_MIN;
+      const st = resolveCloseStart(f.closeStart, end);
+      if (st === null) continue;
+      start = st;
+    } else {
+      start = f.start;
+      end = f.end;
+    }
     usedWeekStart ||= r.usedWeekStart;
-    const s = { date: r.date, startTime: minutesToHHMM(f.start), endTime: minutesToHHMM(f.end), source: f.source.trim() };
+    const s = { date: r.date, startTime: minutesToHHMM(start), endTime: minutesToHHMM(end), source: f.source.trim() };
     const key = `${s.date} ${s.startTime} ${s.endTime}`;
     if (seen.has(key)) continue;
     seen.add(key);
     shifts.push(s);
   }
   shifts.sort((a, b) => (a.date === b.date ? a.startTime.localeCompare(b.startTime) : a.date.localeCompare(b.date)));
-  return { shifts, nameFound: names.length > 0, layout, usedWeekStart, text };
+  return { shifts, nameFound: names.length > 0, layout, usedWeekStart, text, closeTimeMissing };
 }
